@@ -1,0 +1,109 @@
+cmake_minimum_required (VERSION 3.15)
+
+project (TensorCompiler LANGUAGES CXX)
+
+set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CXX_STANDARD_REQUIRED ON)
+
+option (SANITIZE "Enable Address and Undefined sanitizers" OFF)
+option (BUILD_TESTS "Build tests" ON)
+
+if (MSVC)
+    set (COMMON_COMPILE_OPTIONS /W4 /WX)
+else ()
+    set (COMMON_COMPILE_OPTIONS
+        -Wall
+        -Wextra
+        -Wpedantic
+        -Werror
+    )
+endif ()
+
+if (SANITIZE AND NOT MSVC)
+    set (SANITIZE_FLAGS -fsanitize=address,undefined)
+endif ()
+
+# protobuf
+find_package (Protobuf REQUIRED)
+set (PROTO_SRC ${CMAKE_CURRENT_SOURCE_DIR}/proto/onnx.proto3)
+set (PROTO_GEN_CC ${CMAKE_CURRENT_BINARY_DIR}/onnx.proto3.pb.cc)
+set (PROTO_GEN_H  ${CMAKE_CURRENT_BINARY_DIR}/onnx.proto3.pb.h)
+
+add_custom_command (
+    OUTPUT  ${PROTO_GEN_CC} ${PROTO_GEN_H}
+    COMMAND protobuf::protoc
+            --cpp_out=${CMAKE_CURRENT_BINARY_DIR}
+            --proto_path=${CMAKE_CURRENT_SOURCE_DIR}/proto
+            ${PROTO_SRC}
+    DEPENDS ${PROTO_SRC}
+    COMMENT "Generating C++ from onnx.proto3"
+)
+
+# suppress warnings in generated protobuf code
+set_source_files_properties (${PROTO_GEN_CC}
+    PROPERTIES COMPILE_OPTIONS "-Wno-error"
+)
+
+#  core library
+add_library (tc_core
+    src/importer.cpp
+    ${PROTO_SRCS}
+)
+
+target_include_directories (tc_core PUBLIC
+    include/
+    ${CMAKE_CURRENT_BINARY_DIR}
+    ${Protobuf_INCLUDE_DIRS}
+)
+
+target_compile_options (tc_core PRIVATE
+    ${COMMON_COMPILE_OPTIONS}
+    ${SANITIZE_FLAGS}
+)
+
+target_link_options (tc_core PRIVATE
+    ${SANITIZE_FLAGS}
+)
+
+target_link_libraries (tc_core PUBLIC protobuf::libprotobuf)
+
+# main
+add_executable (tc_main src/main.cpp)
+
+target_compile_options (tc_main PRIVATE
+    ${COMMON_COMPILE_OPTIONS}
+    ${SANITIZE_FLAGS}
+)
+
+target_link_options (tc_main PRIVATE
+    ${SANITIZE_FLAGS}
+)
+
+target_link_libraries (tc_main PRIVATE tc_core)
+
+# tests
+if (BUILD_TESTS)
+    enable_testing ()
+
+    find_package (GTest REQUIRED)
+
+    add_executable (tc_tests
+        tests/test_main.cpp
+    )
+
+    target_include_directories (tc_tests PRIVATE include/)
+
+    target_compile_options (tc_tests PRIVATE
+        ${COMMON_COMPILE_OPTIONS}
+        ${SANITIZE_FLAGS}
+    )
+
+    target_link_options (tc_tests PRIVATE
+        ${SANITIZE_FLAGS}
+    )
+
+    target_link_libraries (tc_tests PRIVATE tc_core GTest::gtest GTest::gtest_main)
+
+    include (GoogleTest)
+    gtest_discover_tests (tc_tests)
+endif ()
