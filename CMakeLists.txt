@@ -47,7 +47,7 @@ set_source_files_properties (${PROTO_GEN_CC}
 #  core library
 add_library (tc_core
     src/importer.cpp
-    ${PROTO_SRCS}
+    ${PROTO_GEN_CC}
 )
 
 target_include_directories (tc_core PUBLIC
