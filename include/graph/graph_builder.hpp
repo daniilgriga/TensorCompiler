@@ -178,6 +178,21 @@ namespace tc
             }
         }
 
+        void verify_unique_value_names () const
+        {
+            std::unordered_set<std::string> names;
+
+            for (const auto& v_uptr : values_)
+            {
+                const Value* value = v_uptr.get();
+                if (!value)
+                    throw std::runtime_error("[verify]: values_ has nullptr");
+
+                if (!names.insert(value->name()).second)
+                    throw std::runtime_error("[verify]: duplicate value name: " + value->name());
+            }
+        }
+
     public:
         GraphBuilder() = default;
         ~GraphBuilder() = default;
