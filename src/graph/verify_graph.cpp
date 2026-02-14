@@ -1,5 +1,6 @@
 #include "graph/graph_builder.hpp"
 
+#include <algorithm>
 #include <stdexcept>
 #include <unordered_set>
 
@@ -31,26 +32,20 @@ bool GraphBuilder::contains_value_ptr (const Value* value) const
 
 bool GraphBuilder::value_in_outputs (const Node* node, const Value* value)
 {
-    for (Value* out : node->outputs())
-    {
-        if (out == value)
-        {
-            return true;
-        }
-    }
-    return false;
+    const auto& outputs = node->outputs();
+    return std::find(outputs.begin(), outputs.end(), value) != outputs.end();
+}
+
+bool GraphBuilder::value_in_inputs (const Node* node, const Value* value)
+{
+    const auto& inputs = node->inputs();
+    return std::find(inputs.begin(), inputs.end(), value) != inputs.end();
 }
 
 bool GraphBuilder::node_in_consumers (const Value* value, const Node* node)
 {
-    for (Node* consumer : value->consumers())
-    {
-        if (consumer == node)
-        {
-            return true;
-        }
-    }
-    return false;
+    const auto& consumers = value->consumers();
+    return std::find(consumers.begin(), consumers.end(), node) != consumers.end();
 }
 
 void GraphBuilder::verify_values_consistency () const
@@ -59,23 +54,40 @@ void GraphBuilder::verify_values_consistency () const
     {
         const Value* value = v_uptr.get();
         const Node* producer = value->producer();
-        if (!producer)
-        {
-            continue;
-        }
-
-        if (!contains_node_ptr(producer))
+        if (producer && !contains_node_ptr(producer))
         {
             throw std::runtime_error(
-                "[verify]: value '" + value->name() + "' has producer '"
-                + producer->name() + "' not present in nodes_");
+                "[verify]: value '" + value->name() + "' has producer not present in nodes_");
         }
 
-        if (!value_in_outputs(producer, value))
+        if (producer && !value_in_outputs(producer, value))
         {
             throw std::runtime_error(
                 "[verify]: producer '" + producer->name() + "' (op=" + producer->op_type()
                 + ") does not list value '" + value->name() + "' in outputs");
+        }
+
+        for (Node* consumer : value->consumers())
+        {
+            if (!consumer)
+            {
+                throw std::runtime_error(
+                    "[verify]: value '" + value->name() + "' has nullptr in consumers");
+            }
+
+            if (!contains_node_ptr(consumer))
+            {
+                throw std::runtime_error(
+                    "[verify]: value '" + value->name() + "' has consumer not present in nodes_");
+            }
+
+            if (!value_in_inputs(consumer, value))
+            {
+                throw std::runtime_error(
+                    "[verify]: consumer '" + consumer->name() + "' (op="
+                    + consumer->op_type() + ") does not list value '" + value->name()
+                    + "' in inputs");
+            }
         }
     }
 }

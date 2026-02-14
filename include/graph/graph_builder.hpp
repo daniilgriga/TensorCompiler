@@ -32,6 +32,7 @@ namespace tc
         bool contains_value_ptr (const Value* value) const;
 
         static bool value_in_outputs (const Node* node, const Value* value);
+        static bool value_in_inputs (const Node* node, const Value* value);
         static bool node_in_consumers (const Value* value, const Node* node);
 
         void verify_values_consistency () const;
