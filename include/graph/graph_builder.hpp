@@ -2,6 +2,7 @@
 
 #include <vector>
 #include <unordered_map>
+#include <unordered_set>
 #include <string>
 #include <memory>
 #include <stdexcept>
@@ -117,6 +118,66 @@ namespace tc
             }
         }
 
+        void verify_graph_inputs () const
+        {
+            std::unordered_set<const Value*> seen;
+
+            for (const Value* value : graph_inputs_)
+            {
+                if (!value)
+                    throw std::runtime_error("[verify]: graph_inputs has nullptr value");
+
+                if (!contains_value_ptr(value))
+                    throw std::runtime_error("[verify]: graph_inputs value is not in values_");
+                
+                if (!value->is_graph_input())
+                    throw std::runtime_error("[verify]: graph_inputs value is not marked as input");
+
+                if (!seen.insert(value).second)
+                    throw std::runtime_error("[verify]: duplicate value in graph_inputs");
+            }
+        }
+
+        void verify_graph_outputs () const
+        {
+            std::unordered_set<const Value*> seen;
+
+            for (const Value* value : graph_outputs_)
+            {
+                if (!value)
+                    throw std::runtime_error("[verify]: graph_outputs has nullptr value");
+
+                if (!contains_value_ptr(value))
+                    throw std::runtime_error("[verify]: graph_outputs value is not in values_");
+
+                if (!value->is_graph_output())
+                    throw std::runtime_error("[verify]: graph_outputs value is not marked as output");
+
+                if (!seen.insert(value).second)
+                    throw std::runtime_error("[verify]: duplicate value in graph_outputs");
+            }
+        }
+
+        void verify_graph_initializers () const
+        {
+            std::unordered_set<const Value*> seen;
+
+            for (const Value* value : graph_initializers_)
+            {
+                if (!value)
+                    throw std::runtime_error("[verify]: graph_initializers has nullptr value");
+
+                if (!contains_value_ptr(value))
+                    throw std::runtime_error("[verify]: graph_initializers value is not in values_");
+
+                if (!value->is_initializer())
+                    throw std::runtime_error("[verify]: graph_initializers value is not marked as initializer");
+
+                if (!seen.insert(value).second)
+                    throw std::runtime_error("[verify]: duplicate value in graph_initializers");
+            }
+        }
+
     public:
         GraphBuilder() = default;
         ~GraphBuilder() = default;
@@ -225,6 +286,9 @@ namespace tc
         {
             verify_values_consistency();
             verify_nodes_consistency();
+            verify_graph_inputs();
+            verify_graph_outputs();
+            verify_graph_initializers();
         }
     };
 } // namespace tc
