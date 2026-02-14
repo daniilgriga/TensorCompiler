@@ -47,6 +47,7 @@ set_source_files_properties (${PROTO_GEN_CC}
 #  core library
 add_library (tc_core
     src/importer.cpp
+    src/graph/verify_graph.cpp
     ${PROTO_GEN_CC}
 )
 
