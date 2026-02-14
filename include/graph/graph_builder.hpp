@@ -27,6 +27,96 @@ namespace tc
         std::vector<Value*> graph_initializers_;
 
         std::size_t auto_node_counter_ = 0;
+
+        bool contains_node_ptr (const Node* node) const
+        {
+            for (const auto& n_uptr : nodes_)
+            {
+                if (n_uptr.get() == node)
+                    return true;
+            }
+            return false;
+        }
+
+        bool contains_value_ptr (const Value* value) const
+        {
+            for (const auto& v_uptr : values_)
+            {
+                if (v_uptr.get() == value)
+                    return true;
+            }
+            return false;
+        }
+
+        static bool value_in_outputs (const Node* node, const Value* value)
+        {
+            for (Value* out : node->outputs())
+            {
+                if (out == value)
+                    return true;
+            }
+            return false;
+        }
+
+        static bool node_in_consumers (const Value* value, const Node* node)
+        {
+            for (Node* consumer : value->consumers())
+            {
+                if (consumer == node)
+                    return true;
+            }
+            return false;
+        }
+
+        void verify_values_consistency () const
+        {
+            for (const auto& v_uptr : values_)
+            {
+                const Value* value = v_uptr.get();
+                const Node* producer = value->producer();
+                if (!producer)
+                    continue;
+
+                if (!contains_node_ptr(producer))
+                    throw std::runtime_error("[verify]: value has producer not in nodes_");
+
+                if (!value_in_outputs(producer, value))
+                    throw std::runtime_error("[verify]: producer doesn't have value in outputs");
+            }
+        }
+
+        void verify_nodes_consistency () const
+        {
+            for (const auto& n_uptr : nodes_)
+            {
+                const Node* node = n_uptr.get();
+
+                for (Value* in : node->inputs())
+                {
+                    if (!in)
+                        throw std::runtime_error("[verify]: node input is nullptr");
+
+                    if (!contains_value_ptr(in))
+                        throw std::runtime_error("[verify]: node input value is not in values_");
+
+                    if (!node_in_consumers(in, node))
+                        throw std::runtime_error("[verify]: node missing in input consumers");
+                }
+
+                for (Value* out : node->outputs())
+                {
+                    if (!out)
+                        throw std::runtime_error("[verify]: node output is nullptr");
+
+                    if (!contains_value_ptr(out))
+                        throw std::runtime_error("[verify]: node output value is not in values_");
+
+                    if (out->producer() != node)
+                        throw std::runtime_error("[verify]: node output has wrong producer");
+                }
+            }
+        }
+
     public:
         GraphBuilder() = default;
         ~GraphBuilder() = default;
@@ -131,6 +221,10 @@ namespace tc
         const std::vector<Value*>& graph_outputs () const { return graph_outputs_; }
         const std::vector<Value*>& graph_initializers () const { return graph_initializers_; }
 
-        void verify() const {} // TODO
+        void verify() const
+        {
+            verify_values_consistency();
+            verify_nodes_consistency();
+        }
     };
 } // namespace tc

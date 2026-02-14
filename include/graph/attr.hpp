@@ -18,4 +18,4 @@ namespace tc
     >;
 
     using Attributes = std::unordered_map<std::string, AttrValue>;
-} // namespace tс
+} // namespace tc
