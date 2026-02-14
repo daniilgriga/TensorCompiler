@@ -89,6 +89,7 @@ if (BUILD_TESTS)
 
     add_executable (tc_tests
         tests/test_main.cpp
+        tests/graph_builder_smoke_test.cpp
     )
 
     target_include_directories (tc_tests PRIVATE include/)
