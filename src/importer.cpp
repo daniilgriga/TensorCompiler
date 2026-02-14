@@ -171,6 +171,8 @@ namespace tc
         import_outputs (builder, graph);
         import_nodes (builder, graph);
 
+        builder.verify();
+
         return builder;
     }
 
