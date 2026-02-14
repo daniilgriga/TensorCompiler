@@ -91,9 +91,12 @@ if (BUILD_TESTS)
     add_executable (tc_tests
         tests/test_main.cpp
         tests/graph_builder_smoke_test.cpp
+        tests/importer_test.cpp
     )
 
-    target_include_directories (tc_tests PRIVATE include/)
+    target_compile_definitions (tc_tests PRIVATE
+        TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/models"
+    )
 
     target_compile_options (tc_tests PRIVATE
         ${COMMON_COMPILE_OPTIONS}
