@@ -193,6 +193,40 @@ namespace tc
             }
         }
 
+        void verify_value_map_consistency () const
+        {
+            // map -> values_
+            for (const auto& kv : value_map_)
+            {
+                const std::string& name = kv.first;
+                const Value* value = kv.second;
+
+                if (!value)
+                    throw std::runtime_error("[verify]: value_map has nullptr value");
+
+                if (!contains_value_ptr(value))
+                    throw std::runtime_error("[verify]: value_map points to value not in values_");
+                
+                if (value->name() != name)
+                    throw std::runtime_error("[verify]: value_map key/name mismatch for value");
+            }
+
+            //values_ -> map
+            for (const auto& v_uptr : values_)
+            {
+                const Value* value = v_uptr.get();
+                if (!value)
+                    throw std::runtime_error("[verify]: values_ has nullptr");
+                
+                auto it = value_map_.find(value->name());
+                if (it == value_map_.end())
+                    throw std::runtime_error("[verify]: value from values_ is missing in value_map_");
+                
+                if (it->second != value)
+                    throw std::runtime_error("[verify]: value_map points to different Value* for name");
+            }
+        }
+
     public:
         GraphBuilder() = default;
         ~GraphBuilder() = default;
@@ -304,6 +338,8 @@ namespace tc
             verify_graph_inputs();
             verify_graph_outputs();
             verify_graph_initializers();
+            verify_unique_value_names();
+            verify_value_map_consistency();
         }
     };
 } // namespace tc
