@@ -1,2 +1,5 @@
 build/
 *.onnx
+
+# small generated test models
+!tests/models/*.onnx
