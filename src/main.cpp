@@ -1,7 +1,6 @@
-#include <fstream>
 #include <iostream>
 
-#include "onnx.proto3.pb.h"
+#include "importer/importer.hpp"
 
 int main (int argc, char* argv[])
 {
@@ -11,21 +10,21 @@ int main (int argc, char* argv[])
         return 1;
     }
 
-    onnx::ModelProto model;
-    std::ifstream input (argv[1], std::ios::binary);
-
-    if (!model.ParseFromIstream (&input))
+    try
     {
-        std::cerr << "Error: failed to parse .onnx model" << std::endl;
+        tc::GraphBuilder builder = tc::import_onnx (argv[1]);
+
+        std::cout << "nodes: "        << builder.nodes().size() << std::endl
+                  << "values: "       << builder.values().size() << std::endl
+                  << "inputs: "       << builder.graph_inputs().size() << std::endl
+                  << "outputs: "      << builder.graph_outputs().size() << std::endl
+                  << "initializers: " << builder.graph_initializers().size() << std::endl;
+    }
+    catch (const std::exception& e)
+    {
+        std::cerr << "Error: " << e.what() << std::endl;
         return 1;
     }
-
-    const auto& graph = model.graph();
-    std::cout << "model: " << graph.name() << std::endl
-              << "nodes: " << graph.node_size() << std::endl
-              << "input: " << graph.input_size() << std::endl
-              << "output: " << graph.output_size() << std::endl
-              << "init: " << graph.initializer_size() << std::endl;
 
     return 0;
 }
