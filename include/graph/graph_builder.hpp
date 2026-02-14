@@ -27,6 +27,22 @@ namespace tc
         std::vector<Value*> graph_initializers_;
 
         std::size_t auto_node_counter_ = 0;
+
+        bool contains_node_ptr (const Node* node) const;
+        bool contains_value_ptr (const Value* value) const;
+
+        static bool value_in_outputs (const Node* node, const Value* value);
+        static bool value_in_inputs (const Node* node, const Value* value);
+        static bool node_in_consumers (const Value* value, const Node* node);
+
+        void verify_values_consistency () const;
+        void verify_nodes_consistency () const;
+        void verify_graph_inputs () const;
+        void verify_graph_outputs () const;
+        void verify_graph_initializers () const;
+        void verify_unique_value_names () const;
+        void verify_value_map_consistency () const;
+
     public:
         GraphBuilder() = default;
         ~GraphBuilder() = default;
@@ -131,6 +147,6 @@ namespace tc
         const std::vector<Value*>& graph_outputs () const { return graph_outputs_; }
         const std::vector<Value*>& graph_initializers () const { return graph_initializers_; }
 
-        void verify() const {} // TODO
+        void verify() const;
     };
 } // namespace tc
