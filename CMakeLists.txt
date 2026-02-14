@@ -24,7 +24,7 @@ if (SANITIZE AND NOT MSVC)
 endif ()
 
 # protobuf
-find_package (Protobuf REQUIRED)
+find_package (Protobuf REQUIRED CONFIG)
 set (PROTO_SRC ${CMAKE_CURRENT_SOURCE_DIR}/proto/onnx.proto3)
 set (PROTO_GEN_CC ${CMAKE_CURRENT_BINARY_DIR}/onnx.proto3.pb.cc)
 set (PROTO_GEN_H  ${CMAKE_CURRENT_BINARY_DIR}/onnx.proto3.pb.h)
