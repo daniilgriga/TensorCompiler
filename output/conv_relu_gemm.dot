@@ -1,0 +1,45 @@
+digraph G {
+    rankdir=TB;
+    bgcolor="#2b2b2b";
+    fontname="Helvetica";
+    nodesep=1.0;
+    ranksep=0.8;
+    node [fontname="Helvetica" fontsize=12 fontcolor=white color="#555555"];
+    edge [fontname="Helvetica" color="#888888" arrowhead=normal arrowsize=0.7 labeldistance=2.0 labelangle=0];
+
+    "input_X" [label="X" shape=ellipse style=filled fillcolor="#4a4a4a" fontcolor=white color="#666666" penwidth=1.5];
+
+    "node_conv1" [shape=plain label=<
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8">
+      <TR><TD BGCOLOR="#3b5998" ALIGN="CENTER"><FONT COLOR="white"><B> Conv </B></FONT></TD></TR>
+      <TR><TD BGCOLOR="#3a3a3a" ALIGN="LEFT"><FONT COLOR="#cccccc" POINT-SIZE="10"><B> W &lt;1x1x3x3&gt; </B></FONT></TD></TR>
+      <TR><TD BGCOLOR="#3a3a3a" ALIGN="LEFT"><FONT COLOR="#cccccc" POINT-SIZE="10"><B> B &lt;1&gt; </B></FONT></TD></TR>
+    </TABLE>
+    >];
+    "node_relu1" [shape=plain label=<
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8">
+      <TR><TD BGCOLOR="#795548" ALIGN="CENTER"><FONT COLOR="white"><B> Relu </B></FONT></TD></TR>
+    </TABLE>
+    >];
+    "node_reshape1" [shape=plain label=<
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8">
+      <TR><TD BGCOLOR="#5c6bc0" ALIGN="CENTER"><FONT COLOR="white"><B> Reshape </B></FONT></TD></TR>
+      <TR><TD BGCOLOR="#3a3a3a" ALIGN="LEFT"><FONT COLOR="#cccccc" POINT-SIZE="10"><B> flat_shape &lt;2&gt; </B></FONT></TD></TR>
+    </TABLE>
+    >];
+    "node_gemm1" [shape=plain label=<
+    <TABLE BORDER="0" CELLBORDER="0" CELLSPACING="0" CELLPADDING="8">
+      <TR><TD BGCOLOR="#3b5998" ALIGN="CENTER"><FONT COLOR="white"><B> Gemm </B></FONT></TD></TR>
+      <TR><TD BGCOLOR="#3a3a3a" ALIGN="LEFT"><FONT COLOR="#cccccc" POINT-SIZE="10"><B> W &lt;9x10&gt; </B></FONT></TD></TR>
+      <TR><TD BGCOLOR="#3a3a3a" ALIGN="LEFT"><FONT COLOR="#cccccc" POINT-SIZE="10"><B> B &lt;10&gt; </B></FONT></TD></TR>
+    </TABLE>
+    >];
+
+    "output_Y" [label="Y" shape=ellipse style=filled fillcolor="#4a4a4a" fontcolor=white color="#666666" penwidth=1.5];
+
+    "input_X" -> "node_conv1" [label=" X " fontsize=9 fontcolor="#999999"];
+    "node_conv1" -> "node_relu1" [label=" conv1_out " fontsize=9 fontcolor="#999999"];
+    "node_relu1" -> "node_reshape1" [label=" relu1_out " fontsize=9 fontcolor="#999999"];
+    "node_reshape1" -> "node_gemm1" [label=" flat " fontsize=9 fontcolor="#999999"];
+    "node_gemm1" -> "output_Y" [label=" Y " fontsize=9 fontcolor="#999999"];
+}
