@@ -2,7 +2,7 @@
 
 #include <ostream>
 
-#include "graph_builder.hpp"
+#include "graph/graph_builder.hpp"
 
 namespace tc
 {

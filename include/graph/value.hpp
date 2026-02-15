@@ -24,9 +24,9 @@ namespace tc
 
         explicit Value(std::string name)
         : name_(std::move(name)) {}
-        
+
     public:
-        
+
         const std::string& name () const { return name_; }
         const std::vector<int64_t>& shape () const { return shape_; }
 
@@ -47,6 +47,6 @@ namespace tc
         void mark_initializer () { is_initializer_ = true; }
 
         void set_producer (Node* n) { producer_ = n; }
-        void add_consumer (Node * n) {consumers_.push_back(n); }
+        void add_consumer (Node* n) {consumers_.push_back(n); }
     };
 } // namespace tc
