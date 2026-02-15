@@ -22,11 +22,11 @@ cd TensorCompiler/
 ```bash
 # Debug + tests
 cmake -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON
-cmake --build build/debug -j
+cmake --build build/debug
 
 # Release
 cmake -S . -B build/release -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTS=OFF
-cmake --build build/release -j
+cmake --build build/release
 ```
 
 ## How to Run
@@ -65,7 +65,7 @@ Example:
 
 ```bash
 cmake -S . -B build/tests -DCMAKE_BUILD_TYPE=Debug -DBUILD_TESTS=ON
-cmake --build build/tests -j
+cmake --build build/tests
 ```
 
 ### Run Tests
