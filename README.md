@@ -53,14 +53,13 @@ dot -Tsvg output/conv_relu_gemm.dot -o output/conv_relu_gemm.svg
 ```
 
 Project already contains sample visualizations:
-- `output/conv_relu_gemm.svg` — small gen test model (Conv -> Relu -> Reshape -> Gemm)
-- `output/adv_inception_v3.svg` — [Adversarial Inception v3](https://github.com/onnx/models) from the ONNX Model Zoo
-
-Example:
+- `output/conv_relu_gemm.svg` — small gen test model (Conv -> Relu -> Reshape -> Gemm):
 
 <p align="center">
   <img src="output/conv_relu_gemm.svg" alt="conv_relu_gemm graph">
 </p>
+
+- `output/adv_inception_v3.svg` — [Adversarial Inception v3](https://github.com/onnx/models) from the ONNX Model Zoo: [watch it here](https://github.com/daniilgriga/TensorCompiler/blob/dev/output/adv_inception_v3.svg)
 
 ## Tests
 
