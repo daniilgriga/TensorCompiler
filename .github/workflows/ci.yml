@@ -9,19 +9,24 @@ on:
 jobs:
   build-ubuntu:
     name: Ubuntu (GCC Debug)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
 
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libgtest-dev protobuf-compiler libprotobuf-dev
+          sudo apt-get install -y cmake ninja-build libgtest-dev \
+            protobuf-compiler libprotobuf-dev libabsl-dev
 
       - name: Generate test models
         run: |
-          pip install numpy onnx
+          python3 -m pip install numpy onnx
           python3 tests/gen_test_models.py
 
       - name: Configure
@@ -35,20 +40,25 @@ jobs:
 
   build-ubuntu-release:
     name: Ubuntu (GCC Release)
-    runs-on: ubuntu-latest
+    runs-on: ubuntu-24.04
     needs: build-ubuntu
 
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: |
           sudo apt-get update
-          sudo apt-get install -y cmake ninja-build libgtest-dev protobuf-compiler libprotobuf-dev
+          sudo apt-get install -y cmake ninja-build libgtest-dev \
+            protobuf-compiler libprotobuf-dev libabsl-dev
 
       - name: Generate test models
         run: |
-          pip install numpy onnx
+          python3 -m pip install numpy onnx
           python3 tests/gen_test_models.py
 
       - name: Configure
@@ -67,12 +77,16 @@ jobs:
     steps:
       - uses: actions/checkout@v4
 
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
       - name: Install dependencies
         run: brew install cmake ninja googletest protobuf
 
       - name: Generate test models
         run: |
-          pip install numpy onnx
+          python3 -m pip install numpy onnx
           python3 tests/gen_test_models.py
 
       - name: Configure
