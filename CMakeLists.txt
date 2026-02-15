@@ -96,7 +96,6 @@ if (BUILD_TESTS)
     find_package (GTest REQUIRED)
 
     add_executable (tc_tests
-        tests/test_main.cpp
         tests/graph_builder_smoke_test.cpp
         tests/importer_test.cpp
     )
