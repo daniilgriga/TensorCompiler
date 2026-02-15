@@ -22,7 +22,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build libgtest-dev \
-            protobuf-compiler libprotobuf-dev libabsl-dev
+            protobuf-compiler libprotobuf-dev
 
       - name: Generate test models
         run: |
@@ -54,7 +54,7 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y cmake ninja-build libgtest-dev \
-            protobuf-compiler libprotobuf-dev libabsl-dev
+            protobuf-compiler libprotobuf-dev
 
       - name: Generate test models
         run: |

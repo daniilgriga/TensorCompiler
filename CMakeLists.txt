@@ -24,7 +24,13 @@ if (SANITIZE AND NOT MSVC)
 endif ()
 
 # protobuf
-find_package (Protobuf REQUIRED CONFIG)
+# CONFIG mode provides transitive abseil deps (Arch, Homebrew, vcpkg)
+# MODULE mode (FindProtobuf) works with Ubuntu/Debian apt packages
+find_package (Protobuf CONFIG)
+if (NOT Protobuf_FOUND)
+    find_package (Protobuf REQUIRED)
+endif ()
+
 set (PROTO_SRC ${CMAKE_CURRENT_SOURCE_DIR}/proto/onnx.proto3)
 set (PROTO_GEN_CC ${CMAKE_CURRENT_BINARY_DIR}/onnx.proto3.pb.cc)
 set (PROTO_GEN_H  ${CMAKE_CURRENT_BINARY_DIR}/onnx.proto3.pb.h)
@@ -39,9 +45,9 @@ add_custom_command (
     COMMENT "Generating C++ from onnx.proto3"
 )
 
-# suppress warnings in generated protobuf code
+# suppress all warnings in generated protobuf code
 set_source_files_properties (${PROTO_GEN_CC}
-    PROPERTIES COMPILE_OPTIONS "-Wno-error"
+    PROPERTIES COMPILE_OPTIONS "-w"
 )
 
 #  core library
