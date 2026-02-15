@@ -5,15 +5,16 @@
 
 # Tensor Compiler
 
-Educational ONNX graph importer and graph toolkit:
+The goal of the project is a full-fledged tensor compiler.
+Currently the **frontend** stage is implemented:
 - import ONNX model into an internal compute graph (`GraphBuilder`)
 - validate graph consistency (`verify`)
-- export graph to GraphViz `.dot`
+- export graph to Graphviz `.dot` for visualization
 
 ## How to Install
 
 ```bash
-git clone <git@github.com:daniilgriga/TensorCompiler.git>
+git clone git@github.com:daniilgriga/TensorCompiler.git
 cd TensorCompiler/
 ```
 
@@ -52,12 +53,14 @@ dot -Tsvg output/conv_relu_gemm.dot -o output/conv_relu_gemm.svg
 ```
 
 Project already contains sample visualizations:
-- `output/conv_relu_gemm.svg`
-- `output/adv_inception_v3.svg`
+- `output/conv_relu_gemm.svg` — small gen test model (Conv -> Relu -> Reshape -> Gemm)
+- `output/adv_inception_v3.svg` — [Adversarial Inception v3](https://github.com/onnx/models) from the ONNX Model Zoo
 
 Example:
 
-![conv_relu_gemm graph](output/conv_relu_gemm.svg)
+<p align="center">
+  <img src="output/conv_relu_gemm.svg" alt="conv_relu_gemm graph">
+</p>
 
 ## Tests
 
