@@ -192,6 +192,7 @@ private:
         if (op == "Mul")    { emit_elementwise (b, loc, node, op); return; }
         if (op == "Relu")   { emit_relu        (b, loc, node);     return; }
         if (op == "MatMul") { emit_matmul      (b, loc, node);     return; }
+        if (op == "Gemm")   { emit_gemm        (b, loc, node);     return; }
 
         throw std::runtime_error ("emit_node: unsupported op '" + op + "'");
     }
@@ -300,6 +301,116 @@ private:
                 mlir::ValueRange{a, bv},
                 mlir::ValueRange{out})
             .getResult (0);
+
+        value_map_[node.outputs()[0]->name()] = result;
+    }
+
+    // scale all elements of a tensor by a float scalar via linalg.generic
+    mlir::Value scale_tensor (mlir::OpBuilder& b, mlir::Location loc,
+                              mlir::Value tensor, double factor)
+    {
+        auto t    = mlir::cast<mlir::RankedTensorType> (tensor.getType());
+        mlir::Type elem  = t.getElementType();
+        int64_t    rank  = t.getRank();
+
+        mlir::AffineMap identity =
+            mlir::AffineMap::getMultiDimIdentityMap (rank, ctx_.get());
+        llvm::SmallVector<mlir::utils::IteratorType> iters (
+            rank, mlir::utils::IteratorType::parallel);
+
+        mlir::Value out = make_empty_like (b, loc, tensor);
+
+        auto generic = mlir::linalg::GenericOp::create (
+            b, loc,
+            mlir::TypeRange{t},
+            mlir::ValueRange{tensor},
+            mlir::ValueRange{out},
+            llvm::SmallVector<mlir::AffineMap>{identity, identity},
+            iters, "", "");
+
+        mlir::Block* body = &generic.getRegion().emplaceBlock();
+        body->addArgument (elem, loc);
+        body->addArgument (elem, loc);
+
+        mlir::OpBuilder bb (body, body->end());
+        mlir::Value scalar = mlir::arith::ConstantOp::create (
+                                 bb, loc, elem,
+                                 bb.getFloatAttr (elem, factor)).getResult();
+        mlir::Value result = mlir::arith::MulFOp::create (
+                                 bb, loc, body->getArgument (0), scalar).getResult();
+        mlir::linalg::YieldOp::create (bb, loc, mlir::ValueRange{result});
+
+        return generic.getResult (0);
+    }
+
+    void emit_gemm (mlir::OpBuilder& b, mlir::Location loc, const Node& node)
+    {
+        if (node.inputs().size() < 2 || node.outputs().size() < 1)
+            throw std::runtime_error ("emit_gemm: expected at least 2 inputs and 1 output");
+
+        mlir::Value a  = lookup (node.inputs()[0]->name());
+        mlir::Value bv = lookup (node.inputs()[1]->name());
+
+        auto a_type  = mlir::cast<mlir::RankedTensorType> (a.getType());
+        auto bv_type = mlir::cast<mlir::RankedTensorType> (bv.getType());
+
+        float alpha  = 1.0f;
+        float beta   = 1.0f;
+        int64_t transA = 0;
+        int64_t transB = 0;
+
+        if (const auto* v = node.attribute ("alpha"))
+            alpha  = std::get<float> (*v);
+        if (const auto* v = node.attribute ("beta"))
+            beta   = std::get<float> (*v);
+        if (const auto* v = node.attribute ("transA"))
+            transA = std::get<int64_t> (*v);
+        if (const auto* v = node.attribute ("transB"))
+            transB = std::get<int64_t> (*v);
+
+        // output shape [M, N]
+        int64_t M = transA ? a_type.getShape()[1] : a_type.getShape()[0];
+        int64_t N = transB ? bv_type.getShape()[0] : bv_type.getShape()[1];
+        mlir::Type elem = a_type.getElementType();
+
+        mlir::Value out = make_zero_tensor (b, loc, {M, N}, elem);
+
+        mlir::Value result;
+        if (!transA && !transB)
+            result = mlir::linalg::MatmulOp::create (
+                         b, loc, mlir::ValueRange{a, bv},
+                         mlir::ValueRange{out}).getResult (0);
+        else if (!transA && transB)
+            result = mlir::linalg::MatmulTransposeBOp::create (
+                         b, loc, mlir::ValueRange{a, bv},
+                         mlir::ValueRange{out}).getResult (0);
+        else if (transA && !transB)
+            result = mlir::linalg::MatmulTransposeAOp::create (
+                         b, loc, mlir::ValueRange{a, bv},
+                         mlir::ValueRange{out}).getResult (0);
+        else
+            throw std::runtime_error ("emit_gemm: transA=1 and transB=1 not supported");
+
+        if (alpha != 1.0f)
+            result = scale_tensor (b, loc, result, static_cast<double> (alpha));
+
+        // add bias C if present
+        if (node.inputs().size() >= 3 && !node.inputs()[2]->name().empty())
+        {
+            mlir::Value bias = lookup (node.inputs()[2]->name());
+
+            if (beta != 1.0f && beta != 0.0f)
+                bias = scale_tensor (b, loc, bias, static_cast<double> (beta));
+
+            if (beta != 0.0f)
+            {
+                mlir::Value bias_out = make_empty_like (b, loc, result);
+                result = mlir::linalg::AddOp::create (
+                             b, loc,
+                             mlir::ValueRange{result, bias},
+                             mlir::ValueRange{bias_out}).getResult (0);
+            }
+        }
 
         value_map_[node.outputs()[0]->name()] = result;
     }
