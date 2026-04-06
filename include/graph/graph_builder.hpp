@@ -14,7 +14,7 @@
 
 namespace tc
 {
-    class GraphBuilder 
+    class GraphBuilder
     {
     private:
         std::vector<std::unique_ptr<Node>> nodes_;
@@ -101,6 +101,18 @@ namespace tc
             value->mark_initializer();
             if (std::find(graph_initializers_.begin(), graph_initializers_.end(), value) == graph_initializers_.end())
                 graph_initializers_.push_back(value);
+        }
+
+        void set_value_dtype (Value* value, DType dtype)
+        {
+            if (!value) return;
+            value->set_dtype(dtype);
+        }
+
+        void set_value_data (Value* value, std::vector<uint8_t> data)
+        {
+            if (!value) return;
+            value->set_data(std::move(data));
         }
 
         Node* add_node (std::string op_type,
