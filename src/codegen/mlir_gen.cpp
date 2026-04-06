@@ -69,18 +69,19 @@ class MLIRCodegen
 {
 public:
     explicit MLIRCodegen (const GraphBuilder& builder)
-        : builder_ (builder)
+        : builder_ (builder),
+          ctx_ (std::make_unique<mlir::MLIRContext>())
     {
         // register all dialects we emit
-        ctx_.loadDialect<mlir::func::FuncDialect,
-                         mlir::arith::ArithDialect,
-                         mlir::linalg::LinalgDialect,
-                         mlir::tensor::TensorDialect>();
+        ctx_->loadDialect<mlir::func::FuncDialect,
+                          mlir::arith::ArithDialect,
+                          mlir::linalg::LinalgDialect,
+                          mlir::tensor::TensorDialect>();
     }
 
-    mlir::OwningOpRef<mlir::ModuleOp> emit ()
+    MlirModule emit ()
     {
-        auto loc = mlir::UnknownLoc::get (&ctx_);
+        auto loc = mlir::UnknownLoc::get (ctx_.get());
 
         mlir::OwningOpRef<mlir::ModuleOp> module =
             mlir::ModuleOp::create (loc);
@@ -89,12 +90,12 @@ public:
 
         emit_func (b, loc, *module);
 
-        return module;
+        return MlirModule {std::move (ctx_), std::move (module)};
     }
 
 private:
     const GraphBuilder& builder_;
-    mlir::MLIRContext   ctx_;
+    std::unique_ptr<mlir::MLIRContext> ctx_;
 
     // SSA values for graph values by name
     std::unordered_map<std::string, mlir::Value> value_map_;
@@ -107,17 +108,13 @@ private:
                     mlir::Location   loc,
                     mlir::ModuleOp   module)
     {
-        // build function signature: (graph_inputs...) -> (graph_outputs...)
+        // input types are always known
         llvm::SmallVector<mlir::Type> arg_types;
         for (const Value* v : builder_.graph_inputs())
-            arg_types.push_back (value_to_tensor_type (*v, &ctx_));
+            arg_types.push_back (value_to_tensor_type (*v, ctx_.get()));
 
-        llvm::SmallVector<mlir::Type> res_types;
-        for (const Value* v : builder_.graph_outputs())
-            res_types.push_back (value_to_tensor_type (*v, &ctx_));
-
-        auto func_type = b.getFunctionType (arg_types, res_types);
-        auto func_op   = mlir::func::FuncOp::create (loc, "main", func_type);
+        auto placeholder_func_type = b.getFunctionType (arg_types, {});
+        auto func_op = mlir::func::FuncOp::create (loc, "main", placeholder_func_type);
 
         mlir::Block* entry = func_op.addEntryBlock();
         mlir::OpBuilder body_builder (entry, entry->end());
@@ -134,8 +131,9 @@ private:
         for (const auto& node : builder_.nodes())
             emit_node (body_builder, loc, *node);
 
-        // collect outputs and emit return
+        // collect outputs - types are now known from value_map_ SSA values
         llvm::SmallVector<mlir::Value> results;
+        llvm::SmallVector<mlir::Type>  res_types;
         for (const Value* v : builder_.graph_outputs())
         {
             auto it = value_map_.find (v->name());
@@ -143,9 +141,13 @@ private:
                 throw std::runtime_error (
                     "emit_func: output value not found: " + v->name());
             results.push_back (it->second);
+            res_types.push_back (it->second.getType());
         }
 
         mlir::func::ReturnOp::create (body_builder, loc, results);
+
+        // patch the function type with the correct return types
+        func_op.setType (b.getFunctionType (arg_types, res_types));
 
         module.push_back (func_op);
     }
@@ -157,7 +159,7 @@ private:
             if (value_map_.count (v->name()))
                 continue; // already emitted
 
-            mlir::RankedTensorType tensor_type = value_to_tensor_type (*v, &ctx_);
+            mlir::RankedTensorType tensor_type = value_to_tensor_type (*v, ctx_.get());
 
             // build a dense elements attribute from raw bytes
             if (v->data().empty())
@@ -206,17 +208,118 @@ private:
         return it->second;
     }
 
+    // output slot tensor required by linalg value semantics
+    mlir::Value make_empty_like (mlir::OpBuilder& b, mlir::Location loc,
+                                 mlir::Value ref)
+    {
+        auto tensor_type = mlir::cast<mlir::RankedTensorType> (ref.getType());
+
+        // dynamic dims need runtime tensor.dim values; static ones are in the type
+        llvm::SmallVector<mlir::Value> dyn_sizes;
+        for (int64_t i = 0; i < tensor_type.getRank(); ++i)
+        {
+            if (tensor_type.isDynamicDim (i))
+            {
+                mlir::Value idx = mlir::arith::ConstantIndexOp::create (
+                    b, loc, i);
+                dyn_sizes.push_back (
+                    mlir::tensor::DimOp::create (b, loc, ref, idx));
+            }
+        }
+
+        return mlir::tensor::EmptyOp::create (
+            b, loc, tensor_type.getShape(), tensor_type.getElementType(),
+            dyn_sizes);
+    }
+
     void emit_elementwise (mlir::OpBuilder& b, mlir::Location loc,
                            const Node& node, const std::string& op_type)
     {
-        (void) b; (void) loc; (void) node; (void) op_type;
-        throw std::runtime_error ("emit_elementwise: not yet implemented");
+        if (node.inputs().size() < 2 || node.outputs().size() < 1)
+            throw std::runtime_error (
+                "emit_elementwise: expected 2 inputs and 1 output for op '" +
+                op_type + "'");
+
+        mlir::Value lhs = lookup (node.inputs()[0]->name());
+        mlir::Value rhs = lookup (node.inputs()[1]->name());
+        mlir::Value out = make_empty_like (b, loc, lhs);
+
+        mlir::Value result;
+        if (op_type == "Add")
+            result = mlir::linalg::AddOp::create (b, loc, mlir::ValueRange{lhs, rhs},
+                                                  mlir::ValueRange{out}).getResult (0);
+        else if (op_type == "Mul")
+            result = mlir::linalg::MulOp::create (b, loc, mlir::ValueRange{lhs, rhs},
+                                                  mlir::ValueRange{out}).getResult (0);
+        else
+            throw std::runtime_error (
+                "emit_elementwise: unknown op_type '" + op_type + "'");
+
+        value_map_[node.outputs()[0]->name()] = result;
     }
 
+    // Relu = max(x, 0) via linalg.generic - no dedicated linalg.relu exists
     void emit_relu (mlir::OpBuilder& b, mlir::Location loc, const Node& node)
     {
-        (void) b; (void) loc; (void) node;
-        throw std::runtime_error ("emit_relu: not yet implemented");
+        if (node.inputs().size() < 1 || node.outputs().size() < 1)
+            throw std::runtime_error ("emit_relu: expected 1 input and 1 output");
+
+        mlir::Value input = lookup (node.inputs()[0]->name());
+        mlir::Value out   = make_empty_like (b, loc, input);
+
+        auto tensor_type =
+            mlir::cast<mlir::RankedTensorType> (input.getType());
+        mlir::Type elem = tensor_type.getElementType();
+
+        int64_t rank = tensor_type.getRank();
+
+        mlir::AffineMap identity =
+            mlir::AffineMap::getMultiDimIdentityMap (rank, ctx_.get());
+        llvm::SmallVector<mlir::AffineMap> indexing_maps = {identity, identity};
+
+        llvm::SmallVector<mlir::utils::IteratorType> iterator_types (
+            rank, mlir::utils::IteratorType::parallel);
+
+        auto generic_op = mlir::linalg::GenericOp::create (
+            b, loc,
+            /*resultTensorTypes=*/mlir::TypeRange{tensor_type},
+            /*inputs=*/mlir::ValueRange{input},
+            /*outputs=*/mlir::ValueRange{out},
+            indexing_maps,
+            iterator_types,
+            /*doc=*/"",
+            /*library_call=*/"");
+
+        mlir::Block* body = &generic_op.getRegion().emplaceBlock();
+        body->addArgument (elem, loc); // input scalar
+        body->addArgument (elem, loc); // output scalar (required by linalg.generic)
+
+        mlir::OpBuilder body_b (body, body->end());
+
+        mlir::Value in_scalar  = body->getArgument (0);
+        mlir::Value zero;
+        mlir::Value max_val;
+
+        if (elem.isF32() || elem.isF64() || elem.isF16() || elem.isBF16())
+        {
+            zero    = mlir::arith::ConstantOp::create (
+                          body_b, loc, elem,
+                          body_b.getFloatAttr (elem, 0.0)).getResult();
+            max_val = mlir::arith::MaximumFOp::create (
+                          body_b, loc, in_scalar, zero).getResult();
+        }
+        else
+        {
+            zero    = mlir::arith::ConstantOp::create (
+                          body_b, loc, elem,
+                          body_b.getIntegerAttr (elem, 0)).getResult();
+            max_val = mlir::arith::MaxSIOp::create (
+                          body_b, loc, in_scalar, zero).getResult();
+        }
+
+        mlir::linalg::YieldOp::create (body_b, loc, mlir::ValueRange{max_val});
+
+        value_map_[node.outputs()[0]->name()] = generic_op.getResult (0);
     }
 };
 
@@ -226,7 +329,7 @@ private:
 // public entry point
 // ---------------------------------------------------------------------------
 
-mlir::OwningOpRef<mlir::ModuleOp> graph_to_mlir (const GraphBuilder& builder)
+MlirModule graph_to_mlir (const GraphBuilder& builder)
 {
     MLIRCodegen codegen (builder);
 

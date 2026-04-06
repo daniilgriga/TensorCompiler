@@ -8,7 +8,7 @@
 
 #ifdef TC_WITH_CODEGEN
 #include "codegen/mlir_gen.hpp"
-#include "mlir/IR/BuiltinOps.h"
+#include "llvm/Support/raw_ostream.h"
 #endif
 
 namespace
@@ -59,8 +59,9 @@ int main (int argc, char* argv[])
         // --emit-mlir
         if (argc >= 3 && std::strcmp (argv[2], "--emit-mlir") == 0)
         {
-            auto module = tc::graph_to_mlir (builder);
-            module->dump();
+            tc::MlirModule m = tc::graph_to_mlir (builder);
+            m.module->print (llvm::outs());
+            llvm::outs() << "\n";
             return 0;
         }
 #endif
