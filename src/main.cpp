@@ -6,14 +6,23 @@
 #include "importer/importer.hpp"
 #include "graph/dot_export.hpp"
 
+#ifdef TC_WITH_CODEGEN
+#include "codegen/mlir_gen.hpp"
+#include "mlir/IR/BuiltinOps.h"
+#endif
+
 namespace
 {
 
     void print_usage ()
     {
         std::cerr << "Usage:\n"
-                  << "  tc_main <model.onnx>               print graph stats\n"
-                  << "  tc_main <model.onnx> --dot <file>  export graph to Graphviz dot\n";
+                  << "  tc_main <model.onnx>                print graph stats\n"
+                  << "  tc_main <model.onnx> --dot <file>   export graph to Graphviz dot\n"
+#ifdef TC_WITH_CODEGEN
+                  << "  tc_main <model.onnx> --emit-mlir    print MLIR to stdout\n"
+#endif
+                  ;
     }
 
 } // namespace
@@ -45,6 +54,16 @@ int main (int argc, char* argv[])
 
             return 0;
         }
+
+#ifdef TC_WITH_CODEGEN
+        // --emit-mlir
+        if (argc >= 3 && std::strcmp (argv[2], "--emit-mlir") == 0)
+        {
+            auto module = tc::graph_to_mlir (builder);
+            module->dump();
+            return 0;
+        }
+#endif
 
         // default: print stats
         std::cout << "nodes:        " << builder.nodes().size() << "\n"
