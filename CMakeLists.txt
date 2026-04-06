@@ -1,12 +1,13 @@
-cmake_minimum_required (VERSION 3.15)
+cmake_minimum_required (VERSION 3.20)
 
-project (TensorCompiler LANGUAGES CXX)
+project (TensorCompiler LANGUAGES C CXX)
 
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option (SANITIZE "Enable Address and Undefined sanitizers" OFF)
 option (BUILD_TESTS "Build tests" ON)
+option (BUILD_CODEGEN "Build MLIR/LLVM codegen backend" OFF)
 
 if (MSVC)
     set (COMMON_COMPILE_OPTIONS /W4 /WX)
@@ -75,6 +76,52 @@ target_link_options (tc_core PRIVATE
 
 target_link_libraries (tc_core PUBLIC protobuf::libprotobuf)
 
+# MLIR/LLVM codegen backend
+if (BUILD_CODEGEN)
+    find_package (MLIR REQUIRED CONFIG)
+    find_package (LLVM REQUIRED CONFIG)
+
+    message (STATUS "Found MLIR ${MLIR_PACKAGE_VERSION} in ${MLIR_DIR}")
+    message (STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} in ${LLVM_DIR}")
+
+    list (APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}" "${LLVM_CMAKE_DIR}")
+    include (AddLLVM)
+    include (AddMLIR)
+    include (HandleLLVMOptions)
+
+    add_library (tc_codegen
+        src/codegen/mlir_gen.cpp
+        src/codegen/lowering_pipeline.cpp
+        src/codegen/llvm_emitter.cpp
+    )
+
+    target_include_directories (tc_codegen PUBLIC
+        include/
+        ${MLIR_INCLUDE_DIRS}
+        ${LLVM_INCLUDE_DIRS}
+    )
+
+    target_compile_definitions (tc_codegen PUBLIC
+        ${LLVM_DEFINITIONS}
+    )
+
+    target_compile_options (tc_codegen PRIVATE
+        ${COMMON_COMPILE_OPTIONS}
+        ${SANITIZE_FLAGS}
+        -Wno-unused-parameter
+    )
+
+    target_link_options (tc_codegen PRIVATE
+        ${SANITIZE_FLAGS}
+    )
+
+    target_link_libraries (tc_codegen PUBLIC
+        tc_core
+        MLIR
+        LLVM
+    )
+endif ()
+
 # main
 add_executable (tc_main src/main.cpp)
 
@@ -87,7 +134,12 @@ target_link_options (tc_main PRIVATE
     ${SANITIZE_FLAGS}
 )
 
-target_link_libraries (tc_main PRIVATE tc_core)
+if (BUILD_CODEGEN)
+    target_link_libraries (tc_main PRIVATE tc_core tc_codegen)
+    target_compile_definitions (tc_main PRIVATE TC_WITH_CODEGEN)
+else ()
+    target_link_libraries (tc_main PRIVATE tc_core)
+endif ()
 
 # tests
 if (BUILD_TESTS)
