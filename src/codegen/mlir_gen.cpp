@@ -188,9 +188,10 @@ private:
     {
         const std::string& op = node.op_type();
 
-        if (op == "Add")  { emit_elementwise (b, loc, node, op); return; }
-        if (op == "Mul")  { emit_elementwise (b, loc, node, op); return; }
-        if (op == "Relu") { emit_relu        (b, loc, node);     return; }
+        if (op == "Add")    { emit_elementwise (b, loc, node, op); return; }
+        if (op == "Mul")    { emit_elementwise (b, loc, node, op); return; }
+        if (op == "Relu")   { emit_relu        (b, loc, node);     return; }
+        if (op == "MatMul") { emit_matmul      (b, loc, node);     return; }
 
         throw std::runtime_error ("emit_node: unsupported op '" + op + "'");
     }
@@ -254,6 +255,51 @@ private:
         else
             throw std::runtime_error (
                 "emit_elementwise: unknown op_type '" + op_type + "'");
+
+        value_map_[node.outputs()[0]->name()] = result;
+    }
+
+    // zero-filled tensor of given shape and element type - required as output
+    // slot for linalg.matmul because it accumulates: out[i,j] += a[i,k]*b[k,j]
+    mlir::Value make_zero_tensor (mlir::OpBuilder& b, mlir::Location loc,
+                                  llvm::ArrayRef<int64_t> shape, mlir::Type elem)
+    {
+        auto type = mlir::RankedTensorType::get (shape, elem);
+        mlir::Attribute zero_attr;
+        if (llvm::isa<mlir::FloatType> (elem))
+            zero_attr = b.getFloatAttr (elem, 0.0);
+        else
+            zero_attr = b.getIntegerAttr (elem, 0);
+
+        auto splat = mlir::SplatElementsAttr::get (type, zero_attr);
+
+        return mlir::arith::ConstantOp::create (b, loc, type, splat);
+    }
+
+    void emit_matmul (mlir::OpBuilder& b, mlir::Location loc, const Node& node)
+    {
+        if (node.inputs().size() < 2 || node.outputs().size() < 1)
+            throw std::runtime_error ("emit_matmul: expected 2 inputs and 1 output");
+
+        mlir::Value a = lookup (node.inputs()[0]->name());
+        mlir::Value bv = lookup (node.inputs()[1]->name());
+
+        auto a_type  = mlir::cast<mlir::RankedTensorType> (a.getType());
+        auto bv_type = mlir::cast<mlir::RankedTensorType> (bv.getType());
+
+        // output shape [M, N]: M from a's first dim, N from b's last dim
+        int64_t M = a_type.getShape()[0];
+        int64_t N = bv_type.getShape()[1];
+        mlir::Type elem = a_type.getElementType();
+
+        mlir::Value out = make_zero_tensor (b, loc, {M, N}, elem);
+
+        mlir::Value result =
+            mlir::linalg::MatmulOp::create (
+                b, loc,
+                mlir::ValueRange{a, bv},
+                mlir::ValueRange{out})
+            .getResult (0);
 
         value_map_[node.outputs()[0]->name()] = result;
     }
