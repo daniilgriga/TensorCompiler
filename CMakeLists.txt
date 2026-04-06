@@ -87,7 +87,6 @@ if (BUILD_CODEGEN)
     list (APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}" "${LLVM_CMAKE_DIR}")
     include (AddLLVM)
     include (AddMLIR)
-    include (HandleLLVMOptions)
 
     add_library (tc_codegen
         src/codegen/mlir_gen.cpp
