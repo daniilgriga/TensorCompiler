@@ -193,6 +193,7 @@ private:
         if (op == "Relu")   { emit_relu        (b, loc, node);     return; }
         if (op == "MatMul") { emit_matmul      (b, loc, node);     return; }
         if (op == "Gemm")   { emit_gemm        (b, loc, node);     return; }
+        if (op == "Conv")   { emit_conv        (b, loc, node);     return; }
 
         throw std::runtime_error ("emit_node: unsupported op '" + op + "'");
     }
@@ -410,6 +411,140 @@ private:
                              mlir::ValueRange{result, bias},
                              mlir::ValueRange{bias_out}).getResult (0);
             }
+        }
+
+        value_map_[node.outputs()[0]->name()] = result;
+    }
+
+    void emit_conv (mlir::OpBuilder& b, mlir::Location loc, const Node& node)
+    {
+        if (node.inputs().size() < 2 || node.outputs().size() < 1)
+            throw std::runtime_error ("emit_conv: expected at least 2 inputs and 1 output");
+
+        mlir::Value input  = lookup (node.inputs()[0]->name());
+        mlir::Value filter = lookup (node.inputs()[1]->name());
+
+        auto input_type  = mlir::cast<mlir::RankedTensorType> (input.getType());
+        auto filter_type = mlir::cast<mlir::RankedTensorType> (filter.getType());
+
+        llvm::ArrayRef<int64_t> in_shape = input_type.getShape();  // [N, C, H, W]
+        llvm::ArrayRef<int64_t> f_shape  = filter_type.getShape(); // [F, C, Kh, Kw]
+
+        // read attributes with ONNX defaults
+        std::vector<int64_t> strides   = {1, 1};
+        std::vector<int64_t> dilations = {1, 1};
+        std::vector<int64_t> pads      = {0, 0, 0, 0};
+
+        if (const auto* v = node.attribute ("strides"))
+            strides   = std::get<std::vector<int64_t>> (*v);
+        if (const auto* v = node.attribute ("dilations"))
+            dilations = std::get<std::vector<int64_t>> (*v);
+        if (const auto* v = node.attribute ("pads"))
+            pads      = std::get<std::vector<int64_t>> (*v);
+        // pads: [top, left, bottom, right]
+
+        int64_t N  = in_shape[0];
+        int64_t H  = in_shape[2], W  = in_shape[3];
+        int64_t F  = f_shape[0];
+        int64_t Kh = f_shape[2], Kw = f_shape[3];
+
+        int64_t Ho = (H + pads[0] + pads[2] - dilations[0] * (Kh - 1) - 1) / strides[0] + 1;
+        int64_t Wo = (W + pads[1] + pads[3] - dilations[1] * (Kw - 1) - 1) / strides[1] + 1;
+
+        mlir::Type elem = input_type.getElementType();
+
+        // apply padding if needed - PadOp takes low/high as ValueRange of index SSA values
+        if (pads[0] || pads[1] || pads[2] || pads[3])
+        {
+            llvm::SmallVector<int64_t> padded_shape = {
+                N, in_shape[1],
+                H + pads[0] + pads[2],
+                W + pads[1] + pads[3]
+            };
+            auto padded_type = mlir::RankedTensorType::get (padded_shape, elem);
+
+            llvm::SmallVector<mlir::Value> low_vals  = {
+                mlir::arith::ConstantIndexOp::create (b, loc, 0),
+                mlir::arith::ConstantIndexOp::create (b, loc, 0),
+                mlir::arith::ConstantIndexOp::create (b, loc, pads[0]),
+                mlir::arith::ConstantIndexOp::create (b, loc, pads[1])
+            };
+
+            llvm::SmallVector<mlir::Value> high_vals = {
+                mlir::arith::ConstantIndexOp::create (b, loc, 0),
+                mlir::arith::ConstantIndexOp::create (b, loc, 0),
+                mlir::arith::ConstantIndexOp::create (b, loc, pads[2]),
+                mlir::arith::ConstantIndexOp::create (b, loc, pads[3])
+            };
+
+            auto pad_op = mlir::tensor::PadOp::create (
+                b, loc, padded_type, input,
+                mlir::ValueRange (low_vals), mlir::ValueRange (high_vals));
+
+            mlir::Block* body = &pad_op.getRegion().emplaceBlock();
+            for (int64_t i = 0; i < 4; ++i)
+                body->addArgument (b.getIndexType(), loc);
+
+            mlir::OpBuilder bb (body, body->end());
+            mlir::Value zero = mlir::arith::ConstantOp::create (
+                                   bb, loc, elem,
+                                   bb.getFloatAttr (elem, 0.0)).getResult();
+            mlir::tensor::YieldOp::create (bb, loc, zero);
+
+            input = pad_op.getResult();
+        }
+
+        mlir::Value out = make_zero_tensor (b, loc, {N, F, Ho, Wo}, elem);
+
+        // overload: (builder, loc, TypeRange resultTypes, inputs, outputs, strides, dilations)
+        mlir::Value result =
+            mlir::linalg::Conv2DNchwFchwOp::create (
+                b, loc,
+                mlir::TypeRange{mlir::RankedTensorType::get ({N, F, Ho, Wo}, elem)},
+                mlir::ValueRange{input, filter},
+                mlir::ValueRange{out},
+                b.getDenseI64ArrayAttr (strides),
+                b.getDenseI64ArrayAttr (dilations)).getResult (0);
+
+        // add bias if present (broadcast [F] over [N, F, Ho, Wo])
+        if (node.inputs().size() >= 3 && !node.inputs()[2]->name().empty())
+        {
+            mlir::Value bias     = lookup (node.inputs()[2]->name());
+            mlir::Value bias_out = make_empty_like (b, loc, result);
+
+            // broadcast via linalg.generic: bias[f] added to result[n,f,h,w]
+            auto res_type  = mlir::cast<mlir::RankedTensorType> (result.getType());
+            mlir::AffineMap res_map  =
+                mlir::AffineMap::getMultiDimIdentityMap (4, ctx_.get());
+            // bias indexing map: (n, f, h, w) -> (f)  - dimension 1 only
+            mlir::AffineMap bias_map =
+                mlir::AffineMap::get (4, 0,
+                    {mlir::getAffineDimExpr (1, ctx_.get())}, ctx_.get());
+
+            llvm::SmallVector<mlir::utils::IteratorType> iters (
+                4, mlir::utils::IteratorType::parallel);
+
+            auto generic = mlir::linalg::GenericOp::create (
+                b, loc,
+                mlir::TypeRange{res_type},
+                mlir::ValueRange{result, bias},
+                mlir::ValueRange{bias_out},
+                llvm::SmallVector<mlir::AffineMap>{res_map, bias_map, res_map},
+                iters, "", "");
+
+            mlir::Block* body = &generic.getRegion().emplaceBlock();
+            body->addArgument (elem, loc); // result scalar
+            body->addArgument (elem, loc); // bias scalar
+            body->addArgument (elem, loc); // output scalar
+
+            mlir::OpBuilder bb (body, body->end());
+            mlir::Value sum = mlir::arith::AddFOp::create (
+                                  bb, loc,
+                                  body->getArgument (0),
+                                  body->getArgument (1)).getResult();
+            mlir::linalg::YieldOp::create (bb, loc, mlir::ValueRange{sum});
+
+            result = generic.getResult (0);
         }
 
         value_map_[node.outputs()[0]->name()] = result;
