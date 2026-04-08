@@ -188,12 +188,13 @@ private:
     {
         const std::string& op = node.op_type();
 
-        if (op == "Add")    { emit_elementwise (b, loc, node, op); return; }
-        if (op == "Mul")    { emit_elementwise (b, loc, node, op); return; }
-        if (op == "Relu")   { emit_relu        (b, loc, node);     return; }
-        if (op == "MatMul") { emit_matmul      (b, loc, node);     return; }
-        if (op == "Gemm")   { emit_gemm        (b, loc, node);     return; }
-        if (op == "Conv")   { emit_conv        (b, loc, node);     return; }
+        if (op == "Add")     { emit_elementwise (b, loc, node, op); return; }
+        if (op == "Mul")     { emit_elementwise (b, loc, node, op); return; }
+        if (op == "Relu")    { emit_relu        (b, loc, node);     return; }
+        if (op == "MatMul")  { emit_matmul      (b, loc, node);     return; }
+        if (op == "Gemm")    { emit_gemm        (b, loc, node);     return; }
+        if (op == "Conv")    { emit_conv        (b, loc, node);     return; }
+        if (op == "Reshape") { emit_reshape     (b, loc, node);     return; }
 
         throw std::runtime_error ("emit_node: unsupported op '" + op + "'");
     }
@@ -577,6 +578,53 @@ private:
 
             result = generic.getResult (0);
         }
+
+        value_map_[node.outputs()[0]->name()] = result;
+    }
+
+    void emit_reshape (mlir::OpBuilder& b, mlir::Location loc, const Node& node)
+    {
+        if (node.inputs().size() < 2 || node.outputs().size() < 1)
+            throw std::runtime_error ("emit_reshape: expected 2 inputs and 1 output");
+
+        mlir::Value input = lookup (node.inputs()[0]->name());
+        const Value* shape_val = node.inputs()[1];
+
+        // shape input must be a static int64 initializer
+        if (shape_val->data().empty())
+            throw std::runtime_error (
+                "emit_reshape: shape input '" + shape_val->name() +
+                "' has no data - dynamic shapes not supported");
+
+        const auto* shape_data =
+            reinterpret_cast<const int64_t*> (shape_val->data().data());
+        int64_t shape_rank = static_cast<int64_t> (
+            shape_val->data().size() / sizeof (int64_t));
+
+        llvm::SmallVector<int64_t> target_shape (shape_data, shape_data + shape_rank);
+
+        // build index-typed shape tensor: tensor.reshape requires <Nxindex>
+        mlir::Type idx_type = b.getIndexType();
+        auto shape_tensor_type =
+            mlir::RankedTensorType::get ({shape_rank}, idx_type);
+
+        llvm::SmallVector<mlir::Attribute> idx_attrs;
+        idx_attrs.reserve (static_cast<std::size_t> (shape_rank));
+        for (int64_t v : target_shape)
+            idx_attrs.push_back (b.getIndexAttr (v));
+
+        mlir::Value shape_tensor = mlir::arith::ConstantOp::create (
+            b, loc, shape_tensor_type,
+            mlir::DenseElementsAttr::get (shape_tensor_type,
+                                          llvm::ArrayRef<mlir::Attribute> (idx_attrs)));
+
+        auto input_type = mlir::cast<mlir::RankedTensorType> (input.getType());
+        auto result_type =
+            mlir::RankedTensorType::get (target_shape, input_type.getElementType());
+
+        mlir::Value result =
+            mlir::tensor::ReshapeOp::create (b, loc, result_type, input,
+                shape_tensor).getResult();
 
         value_map_[node.outputs()[0]->name()] = result;
     }

@@ -222,6 +222,32 @@ TEST(CodegenTest, ConvWithBiasEmitsValidMLIR)
     EXPECT_TRUE (mlir::verify (*m.module).succeeded());
 }
 
+TEST(CodegenTest, ReshapeEmitsValidMLIR)
+{
+    tc::GraphBuilder builder;
+    make_input       (builder, "X", {1, 3, 3});
+    make_initializer (builder, "shape", {2});
+
+    // set int64 shape data: [1, 9]
+    tc::Value* sv = builder.find_value ("shape");
+    sv->set_shape ({2});
+    builder.set_value_dtype (sv, tc::DType::Int64);
+    std::vector<int64_t> shape_vals = {1, 9};
+    std::vector<uint8_t> raw (sizeof (int64_t) * 2);
+    std::memcpy (raw.data(), shape_vals.data(), raw.size());
+    builder.set_value_data (sv, std::move (raw));
+
+    make_output (builder, "Y");
+
+    builder.add_node ("Reshape",
+        {builder.find_value ("X"),
+         builder.find_value ("shape")},
+        {builder.find_value ("Y")});
+
+    tc::MlirModule m = tc::graph_to_mlir (builder);
+    EXPECT_TRUE (mlir::verify (*m.module).succeeded());
+}
+
 TEST(CodegenTest, UnsupportedOpThrows)
 {
     tc::GraphBuilder builder;

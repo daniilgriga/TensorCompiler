@@ -24,7 +24,7 @@ def make_conv_relu_gemm():
         np.zeros (1, dtype=np.float32), name="B_conv")
 
     W_gemm = numpy_helper.from_array (
-        np.ones ((9, 10), dtype=np.float32), name="W_gemm")
+        np.ones ((10, 9), dtype=np.float32), name="W_gemm")
 
     B_gemm = numpy_helper.from_array (
         np.zeros (10, dtype=np.float32), name="B_gemm")
