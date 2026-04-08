@@ -1,4 +1,5 @@
-build/
+build*/
+.vscode/
 *.onnx
 
 # small generated test models
