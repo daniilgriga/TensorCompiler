@@ -405,11 +405,42 @@ private:
 
             if (beta != 0.0f)
             {
+                // bias is rank-1 [N], result is rank-2 [M, N] - need broadcast via generic
+                auto res_type = mlir::cast<mlir::RankedTensorType> (result.getType());
                 mlir::Value bias_out = make_empty_like (b, loc, result);
-                result = mlir::linalg::AddOp::create (
-                             b, loc,
-                             mlir::ValueRange{result, bias},
-                             mlir::ValueRange{bias_out}).getResult (0);
+
+                mlir::AffineMap res_map =
+                    mlir::AffineMap::getMultiDimIdentityMap (2, ctx_.get());
+                // bias map: (d0, d1) -> (d1) - broadcast over d0
+                mlir::AffineMap bias_map =
+                    mlir::AffineMap::get (2, 0,
+                        {mlir::getAffineDimExpr (1, ctx_.get())}, ctx_.get());
+
+                llvm::SmallVector<mlir::utils::IteratorType> iters (
+                    2, mlir::utils::IteratorType::parallel);
+
+                auto generic = mlir::linalg::GenericOp::create (
+                    b, loc,
+                    mlir::TypeRange{res_type},
+                    mlir::ValueRange{result, bias},
+                    mlir::ValueRange{bias_out},
+                    llvm::SmallVector<mlir::AffineMap>{res_map, bias_map, res_map},
+                    iters, "", "");
+
+                mlir::Type elem = res_type.getElementType();
+                mlir::Block* body = &generic.getRegion().emplaceBlock();
+                body->addArgument (elem, loc);
+                body->addArgument (elem, loc);
+                body->addArgument (elem, loc);
+
+                mlir::OpBuilder bb (body, body->end());
+                mlir::Value sum = mlir::arith::AddFOp::create (
+                                      bb, loc,
+                                      body->getArgument (0),
+                                      body->getArgument (1)).getResult();
+                mlir::linalg::YieldOp::create (bb, loc, mlir::ValueRange{sum});
+
+                result = generic.getResult (0);
             }
         }
 
