@@ -96,6 +96,9 @@ if (BUILD_CODEGEN)
 
     target_include_directories (tc_codegen PUBLIC
         include/
+    )
+
+    target_include_directories (tc_codegen SYSTEM PUBLIC
         ${MLIR_INCLUDE_DIRS}
         ${LLVM_INCLUDE_DIRS}
     )
@@ -151,6 +154,12 @@ if (BUILD_TESTS)
         tests/importer_test.cpp
     )
 
+    if (BUILD_CODEGEN)
+        target_sources (tc_tests PRIVATE
+            tests/lowering_pipeline_smoke_test.cpp
+        )
+    endif ()
+
     target_compile_definitions (tc_tests PRIVATE
         TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/models"
     )
@@ -165,6 +174,10 @@ if (BUILD_TESTS)
     )
 
     target_link_libraries (tc_tests PRIVATE tc_core GTest::gtest GTest::gtest_main)
+
+    if (BUILD_CODEGEN)
+        target_link_libraries (tc_tests PRIVATE tc_codegen)
+    endif ()
 
     include (GoogleTest)
     gtest_discover_tests (tc_tests)
