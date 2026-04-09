@@ -95,11 +95,12 @@ namespace
             ? llvm::sys::getDefaultTargetTriple()
             : options.target_triple;
 
-        llvm_module.setTargetTriple (llvm::Triple (triple));
+        llvm::Triple target_triple (triple);
+        llvm_module.setTargetTriple (target_triple);
 
         std::string error_msg;
         const llvm::Target* target =
-            llvm::TargetRegistry::lookupTarget (llvm::Triple (triple), error_msg);
+            llvm::TargetRegistry::lookupTarget (target_triple, error_msg);
 
         if (!target)
         {
@@ -113,7 +114,7 @@ namespace
         llvm::TargetOptions target_opts;
         auto target_machine = std::unique_ptr<llvm::TargetMachine> (
             target->createTargetMachine (
-                llvm::Triple (triple),
+                target_triple,
                 cpu,
                 options.features,
                 target_opts,
