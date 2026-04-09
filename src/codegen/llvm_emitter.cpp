@@ -1,7 +1,8 @@
 #include "codegen/llvm_emitter.hpp"
 
-#include "mlir/Target/LLVMIR/Export.h"
+#include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
+#include "mlir/Target/LLVMIR/Export.h"
 #include "llvm/IR/LLVMContext.h"
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LegacyPassManager.h"
@@ -22,6 +23,7 @@ namespace tc
         llvm::InitializeAllAsmPrinters();
         llvm::InitializeAllAsmParsers();
 
+        mlir::registerBuiltinDialectTranslation (*module.getContext());
         mlir::registerLLVMDialectTranslation (*module.getContext());
 
         llvm::LLVMContext llvm_context;

@@ -1,10 +1,19 @@
 #include "codegen/lowering_pipeline.hpp"
-#include "mlir/Pass/PassManager.h"
-#include "mlir/Transforms/Passes.h"
+
+#include "mlir/Conversion/Passes.h"
+#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
+#include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Bufferization/IR/Bufferization.h"
+#include "mlir/Dialect/Bufferization/Transforms/FuncBufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Bufferization/Transforms/Passes.h"
 #include "mlir/Dialect/Linalg/Passes.h"
-#include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
-#include "mlir/Conversion/Passes.h"
+#include "mlir/Dialect/Linalg/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/MemRef/Transforms/Passes.h"
+#include "mlir/Dialect/SCF/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/IR/DialectRegistry.h"
+#include "mlir/Pass/PassManager.h"
+#include "mlir/Transforms/Passes.h"
 
 namespace tc
 {
@@ -13,25 +22,44 @@ namespace tc
         const LoweringPipelineOptions& options
     )
     {
-        mlir::PassManager pm (module.getContext());
+        mlir::MLIRContext* ctx = module.getContext();
+
+        mlir::DialectRegistry registry;
+        mlir::arith::registerBufferizableOpInterfaceExternalModels (registry);
+        mlir::linalg::registerBufferizableOpInterfaceExternalModels (registry);
+        mlir::tensor::registerBufferizableOpInterfaceExternalModels (registry);
+        mlir::scf::registerBufferizableOpInterfaceExternalModels (registry);
+        mlir::bufferization::func_ext::registerBufferizableOpInterfaceExternalModels (registry);
+        ctx->appendDialectRegistry (registry);
+
+        mlir::PassManager pm (ctx);
 
         pm.enableVerifier (options.enable_verifier);
 
         pm.addPass (mlir::createCanonicalizerPass ());
         pm.addPass (mlir::createCSEPass ());
 
+        pm.addPass (mlir::bufferization::createEmptyTensorToAllocTensorPass ());
+
         mlir::bufferization::OneShotBufferizePassOptions bufferize_options;
         bufferize_options.bufferizeFunctionBoundaries = options.bufferize_function_boundaries;
 
         pm.addPass (mlir::bufferization::createOneShotBufferizePass (bufferize_options));
+
+        pm.addPass (mlir::createConvertBufferizationToMemRefPass ());
+
+        pm.addPass (mlir::bufferization::createBufferDeallocationSimplificationPass ());
+        pm.addPass (mlir::bufferization::createLowerDeallocationsPass ());
         pm.addPass (mlir::createCanonicalizerPass ());
         pm.addPass (mlir::createCSEPass ());
 
         pm.addPass (mlir::createConvertLinalgToLoopsPass ());
+        pm.addPass (mlir::createLowerAffinePass ());
         pm.addPass (mlir::createCanonicalizerPass ());
         pm.addPass (mlir::createCSEPass ());
 
         pm.addPass (mlir::createSCFToControlFlowPass ());
+        pm.addPass (mlir::memref::createExpandStridedMetadataPass ());
         pm.addPass (mlir::createCanonicalizerPass ());
         pm.addPass (mlir::createCSEPass ());
 
@@ -49,11 +77,11 @@ namespace tc
         func_options.indexBitwidth = options.index_bitwidth;
         func_options.useBarePtrCallConv = options.use_bare_ptr_call_conv;
 
+        pm.addPass (mlir::createConvertFuncToLLVMPass (func_options));
+        pm.addPass (mlir::createFinalizeMemRefToLLVMConversionPass (memref_options));
+        pm.addPass (mlir::createConvertControlFlowToLLVMPass ());
         pm.addPass (mlir::createArithToLLVMConversionPass (arith_options));
         pm.addPass (mlir::createConvertIndexToLLVMPass (index_options));
-        pm.addPass (mlir::createConvertControlFlowToLLVMPass ());
-        pm.addPass (mlir::createFinalizeMemRefToLLVMConversionPass (memref_options));
-        pm.addPass (mlir::createConvertFuncToLLVMPass (func_options));
 
         if (!options.llvm_data_layout.empty ())
         {
@@ -62,11 +90,12 @@ namespace tc
             pm.addPass (mlir::createSetLLVMModuleDataLayoutPass (data_layout_options));
         }
 
+        pm.addPass (mlir::createReconcileUnrealizedCastsPass ());
+
         pm.addPass (mlir::createCanonicalizerPass ());
         pm.addPass (mlir::createCSEPass ());
 
-        pm.addPass (mlir::createReconcileUnrealizedCastsPass ());
-
         return pm.run (module);
     }
+
 } // namespace tc
