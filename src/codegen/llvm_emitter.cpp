@@ -7,6 +7,7 @@
 #include "llvm/IR/Module.h"
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/MC/TargetRegistry.h"
+#include "llvm/Passes/PassBuilder.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetSelect.h"
@@ -134,6 +135,45 @@ namespace
         return target_machine;
     }
 
+    llvm::OptimizationLevel to_optimization_level (llvm::CodeGenOptLevel opt_level)
+    {
+        switch (opt_level)
+        {
+            case llvm::CodeGenOptLevel::None:       return llvm::OptimizationLevel::O0;
+            case llvm::CodeGenOptLevel::Less:       return llvm::OptimizationLevel::O1;
+            case llvm::CodeGenOptLevel::Default:    return llvm::OptimizationLevel::O2;
+            case llvm::CodeGenOptLevel::Aggressive: return llvm::OptimizationLevel::O3;
+        }
+        return llvm::OptimizationLevel::O0;
+    }
+
+    void run_llvm_optimization_pipeline (
+        llvm::Module& llvm_module,
+        llvm::TargetMachine& target_machine,
+        llvm::CodeGenOptLevel opt_level
+    )
+    {
+        if (opt_level == llvm::CodeGenOptLevel::None)
+            return;
+
+        llvm::PassBuilder pass_builder (&target_machine);
+
+        llvm::LoopAnalysisManager loop_am;
+        llvm::FunctionAnalysisManager function_am;
+        llvm::CGSCCAnalysisManager cgscc_am;
+        llvm::ModuleAnalysisManager module_am;
+
+        pass_builder.registerModuleAnalyses (module_am);
+        pass_builder.registerCGSCCAnalyses (cgscc_am);
+        pass_builder.registerFunctionAnalyses (function_am);
+        pass_builder.registerLoopAnalyses (loop_am);
+        pass_builder.crossRegisterProxies (loop_am, function_am, cgscc_am, module_am);
+
+        llvm::ModulePassManager module_pm =
+            pass_builder.buildPerModuleDefaultPipeline (to_optimization_level (opt_level));
+        module_pm.run (llvm_module, module_am);
+    }
+
     int emit_codegen_file (
         llvm::Module& llvm_module,
         llvm::TargetMachine& target_machine,
@@ -183,12 +223,21 @@ namespace
         if (!llvm_module)
             return 1;
 
+        std::unique_ptr<llvm::TargetMachine> target_machine;
+        if (options.opt_level != llvm::CodeGenOptLevel::None ||
+            options.output_kind != OutputKind::LLVM_IR)
+        {
+            target_machine = create_target_machine (*llvm_module, options);
+            if (!target_machine)
+                return 1;
+        }
+
+        if (target_machine)
+            run_llvm_optimization_pipeline (
+                *llvm_module, *target_machine, options.opt_level);
+
         if (options.output_kind == OutputKind::LLVM_IR)
             return emit_llvm_ir (*llvm_module, options);
-
-        auto target_machine = create_target_machine (*llvm_module, options);
-        if (!target_machine)
-            return 1;
 
         return emit_codegen_file (*llvm_module, *target_machine, options);
     }

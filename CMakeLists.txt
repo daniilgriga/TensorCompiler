@@ -188,6 +188,13 @@ if (BUILD_TESTS)
             tests/codegen_test.cpp
         )
 
+        add_dependencies (tc_codegen_tests tc_main)
+
+        target_compile_definitions (tc_codegen_tests PRIVATE
+            TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/models"
+            TC_MAIN_BIN="$<TARGET_FILE:tc_main>"
+        )
+
         target_compile_options (tc_codegen_tests PRIVATE
             ${COMMON_COMPILE_OPTIONS}
             ${SANITIZE_FLAGS}

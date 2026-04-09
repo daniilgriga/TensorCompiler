@@ -1,5 +1,8 @@
 #include <cstring>
 #include <dlfcn.h>
+#include <filesystem>
+#include <string>
+#include <system_error>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -280,6 +283,37 @@ TEST(CodegenTest, UnsupportedOpThrows)
     lsan_disable_if_available ();
     EXPECT_THROW (tc::graph_to_mlir (builder), std::runtime_error);
     lsan_enable_if_available ();
+}
+
+TEST(CodegenTest, EmitObjCliWritesOutputFile)
+{
+    const std::filesystem::path model_path =
+        std::filesystem::path (TEST_MODELS_DIR) / "add.onnx";
+
+    std::error_code ec;
+    const std::filesystem::path output_path =
+        std::filesystem::temp_directory_path (ec) / "tc_emit_obj_test.o";
+    ASSERT_FALSE (ec);
+
+    std::filesystem::remove (output_path, ec);
+    ec.clear ();
+
+    std::string cmd;
+    cmd += "\"";
+    cmd += TC_MAIN_BIN;
+    cmd += "\" \"";
+    cmd += model_path.string ();
+    cmd += "\" --emit-obj -o \"";
+    cmd += output_path.string ();
+    cmd += "\" >/dev/null 2>/dev/null";
+
+    const int rc = std::system (cmd.c_str());
+    EXPECT_EQ (rc, 0);
+
+    ASSERT_TRUE (std::filesystem::exists (output_path));
+    EXPECT_GT (std::filesystem::file_size (output_path), 0u);
+
+    std::filesystem::remove (output_path, ec);
 }
 
 } // namespace
