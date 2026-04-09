@@ -17,60 +17,85 @@
 
 namespace tc
 {
-    int emit_output (mlir::ModuleOp module, const EmitOptions& options)
+namespace
+{
+    void initialize_codegen_backends ()
     {
         llvm::InitializeAllTargets();
         llvm::InitializeAllTargetMCs();
         llvm::InitializeAllAsmPrinters();
         llvm::InitializeAllAsmParsers();
+    }
 
+    std::unique_ptr<llvm::Module> translate_to_llvm_ir (
+        mlir::ModuleOp module,
+        llvm::LLVMContext& llvm_context
+    )
+    {
         mlir::registerBuiltinDialectTranslation (*module.getContext());
         mlir::registerLLVMDialectTranslation (*module.getContext());
 
-        llvm::LLVMContext llvm_context;
         auto llvm_module = mlir::translateModuleToLLVMIR (module, llvm_context);
 
         if (!llvm_module)
         {
             llvm::errs() << "error: failed to translate MLIR to LLVM IR\n";
-            return 1;
+            return nullptr;
         }
 
-        std::unique_ptr<llvm::raw_fd_ostream> file_stream;
-        auto open_output_file = [&file_stream] (const std::string& path) -> bool
-        {
-            std::error_code ec;
-            file_stream = std::make_unique<llvm::raw_fd_ostream> (
-                path, ec, llvm::sys::fs::OF_None);
-            if (ec)
-            {
-                llvm::errs() << "error: cannot open output file '" << path
-                             << "': " << ec.message() << "\n";
-                return false;
-            }
-            return true;
-        };
+        return llvm_module;
+    }
 
+    bool open_file_stream (
+        const std::string& path,
+        std::unique_ptr<llvm::raw_fd_ostream>& file_stream
+    )
+    {
+        std::error_code ec;
+        file_stream = std::make_unique<llvm::raw_fd_ostream> (
+            path, ec, llvm::sys::fs::OF_None);
+        if (ec)
+        {
+            llvm::errs() << "error: cannot open output file '" << path
+                         << "': " << ec.message() << "\n";
+            return false;
+        }
+        return true;
+    }
+
+    int emit_llvm_ir (llvm::Module& llvm_module, const EmitOptions& options)
+    {
         if (options.output_kind == OutputKind::LLVM_IR)
         {
             if (!options.output_path.empty())
             {
-                if (!open_output_file (options.output_path))
+                std::unique_ptr<llvm::raw_fd_ostream> file_stream;
+                if (!open_file_stream (options.output_path, file_stream))
                     return 1;
-                llvm_module->print (*file_stream, nullptr);
+
+                llvm_module.print (*file_stream, nullptr);
                 file_stream->flush();
                 return 0;
             }
 
-            llvm_module->print (llvm::outs(), nullptr);
+            llvm_module.print (llvm::outs(), nullptr);
             return 0;
         }
 
+        llvm::errs() << "error: invalid output kind for emit_llvm_ir\n";
+        return 1;
+    }
+
+    std::unique_ptr<llvm::TargetMachine> create_target_machine (
+        llvm::Module& llvm_module,
+        const EmitOptions& options
+    )
+    {
         std::string triple = options.target_triple.empty()
             ? llvm::sys::getDefaultTargetTriple()
             : options.target_triple;
 
-        llvm_module->setTargetTriple (llvm::Triple (triple));
+        llvm_module.setTargetTriple (llvm::Triple (triple));
 
         std::string error_msg;
         const llvm::Target* target =
@@ -80,7 +105,7 @@ namespace tc
         {
             llvm::errs() << "error: unknown target '" << triple
                           << "': " << error_msg << "\n";
-            return 1;
+            return nullptr;
         }
 
         std::string cpu = options.cpu.empty() ? "generic" : options.cpu;
@@ -101,11 +126,19 @@ namespace tc
         if (!target_machine)
         {
             llvm::errs() << "error: failed to create target machine\n";
-            return 1;
+            return nullptr;
         }
 
-        llvm_module->setDataLayout (target_machine->createDataLayout());
+        llvm_module.setDataLayout (target_machine->createDataLayout());
+        return target_machine;
+    }
 
+    int emit_codegen_file (
+        llvm::Module& llvm_module,
+        llvm::TargetMachine& target_machine,
+        const EmitOptions& options
+    )
+    {
         llvm::legacy::PassManager pass_manager;
 
         auto file_type = (options.output_kind == OutputKind::OBJ)
@@ -117,24 +150,46 @@ namespace tc
             output_path = "a.o";
 
         llvm::raw_pwrite_stream* output_stream = &llvm::outs();
+        std::unique_ptr<llvm::raw_fd_ostream> file_stream;
         if (!output_path.empty())
         {
-            if (!open_output_file (output_path))
+            if (!open_file_stream (output_path, file_stream))
                 return 1;
             output_stream = file_stream.get();
         }
 
-        if (target_machine->addPassesToEmitFile (
+        if (target_machine.addPassesToEmitFile (
                 pass_manager, *output_stream, nullptr, file_type))
         {
             llvm::errs () << "error: cannot emit file for this target\n";
             return 1;
         }
 
-        pass_manager.run (*llvm_module);
+        pass_manager.run (llvm_module);
         if (file_stream)
             file_stream->flush();
         return 0;
+    }
+
+} // namespace
+
+    int emit_output (mlir::ModuleOp module, const EmitOptions& options)
+    {
+        initialize_codegen_backends ();
+
+        llvm::LLVMContext llvm_context;
+        auto llvm_module = translate_to_llvm_ir (module, llvm_context);
+        if (!llvm_module)
+            return 1;
+
+        if (options.output_kind == OutputKind::LLVM_IR)
+            return emit_llvm_ir (*llvm_module, options);
+
+        auto target_machine = create_target_machine (*llvm_module, options);
+        if (!target_machine)
+            return 1;
+
+        return emit_codegen_file (*llvm_module, *target_machine, options);
     }
 
 } // namespace tc
