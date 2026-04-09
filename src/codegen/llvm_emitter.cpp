@@ -47,7 +47,7 @@ namespace tc
 
         std::string error_msg;
         const llvm::Target* target =
-            llvm::TargetRegistry::lookupTarget (triple, error_msg);
+            llvm::TargetRegistry::lookupTarget (llvm::Triple (triple), error_msg);
 
         if (!target)
         {
