@@ -97,3 +97,95 @@ jobs:
 
       - name: Unit tests
         run: ctest --test-dir build --output-on-failure
+
+  build-codegen-macos:
+    name: macOS (Clang Codegen)
+    runs-on: macos-latest
+    needs: build-macos
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: brew install cmake ninja googletest protobuf llvm
+
+      - name: Generate test models
+        run: |
+          python3 -m pip install numpy onnx
+          python3 tests/gen_test_models.py
+
+      - name: Configure
+        run: |
+          LLVM_PREFIX="$(brew --prefix llvm)"
+          cmake -S . -B build-codegen -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTS=ON \
+            -DBUILD_CODEGEN=ON \
+            -DLLVM_DIR="${LLVM_PREFIX}/lib/cmake/llvm" \
+            -DMLIR_DIR="${LLVM_PREFIX}/lib/cmake/mlir"
+
+      - name: Build
+        run: cmake --build build-codegen
+
+      - name: Unit tests
+        run: ctest --test-dir build-codegen --output-on-failure
+
+  build-codegen-ubuntu:
+    name: Ubuntu (GCC Codegen)
+    runs-on: ubuntu-24.04
+    needs: build-ubuntu
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y cmake ninja-build libgtest-dev \
+            protobuf-compiler libprotobuf-dev
+
+          # LLVM/MLIR package names can be versioned on Ubuntu.
+          if sudo apt-get install -y llvm-18-dev mlir-18-tools libmlir-18-dev; then
+            echo "LLVM_CMAKE_DIR=/usr/lib/llvm-18/lib/cmake/llvm" >> "$GITHUB_ENV"
+            echo "MLIR_CMAKE_DIR=/usr/lib/llvm-18/lib/cmake/mlir" >> "$GITHUB_ENV"
+          elif sudo apt-get install -y llvm-17-dev mlir-17-tools libmlir-17-dev; then
+            echo "LLVM_CMAKE_DIR=/usr/lib/llvm-17/lib/cmake/llvm" >> "$GITHUB_ENV"
+            echo "MLIR_CMAKE_DIR=/usr/lib/llvm-17/lib/cmake/mlir" >> "$GITHUB_ENV"
+          else
+            sudo apt-get install -y llvm-dev mlir-tools libmlir-dev
+            echo "LLVM_CMAKE_DIR=$(llvm-config --cmakedir)" >> "$GITHUB_ENV"
+            MLIR_DIR_PATH="$(dpkg -L libmlir-dev | grep '/cmake/mlir$' | head -n 1)"
+            if [ -z "$MLIR_DIR_PATH" ]; then
+              echo "Failed to locate MLIR CMake directory" >&2
+              exit 1
+            fi
+            echo "MLIR_CMAKE_DIR=$MLIR_DIR_PATH" >> "$GITHUB_ENV"
+          fi
+
+      - name: Generate test models
+        run: |
+          python3 -m pip install numpy onnx
+          python3 tests/gen_test_models.py
+
+      - name: Configure
+        run: |
+          cmake -S . -B build-codegen -G Ninja \
+            -DCMAKE_BUILD_TYPE=Debug \
+            -DBUILD_TESTS=ON \
+            -DBUILD_CODEGEN=ON \
+            -DLLVM_DIR="${LLVM_CMAKE_DIR}" \
+            -DMLIR_DIR="${MLIR_CMAKE_DIR}"
+
+      - name: Build
+        run: cmake --build build-codegen
+
+      - name: Unit tests
+        run: ctest --test-dir build-codegen --output-on-failure
