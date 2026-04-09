@@ -40,6 +40,16 @@ static llvm::cl::opt<bool> emit_asm (
     "emit-asm",
     llvm::cl::desc ("Print assembly to stdout"));
 
+static llvm::cl::opt<bool> emit_obj (
+    "emit-obj",
+    llvm::cl::desc ("Emit object file"));
+
+static llvm::cl::opt<std::string> output_file (
+    "o",
+    llvm::cl::desc ("Output file for --emit-llvm/--emit-asm/--emit-obj"),
+    llvm::cl::value_desc ("file"),
+    llvm::cl::init (""));
+
 static llvm::cl::opt<char> opt_level (
     "O",
     llvm::cl::desc ("Optimization level (0/1/2/3)"),
@@ -87,8 +97,19 @@ int main (int argc, char* argv[])
             return 0;
         }
 
-        // --emit-llvm / --emit-asm
-        if (emit_llvm || emit_asm)
+        const int emit_modes =
+            static_cast<int> (emit_llvm) +
+            static_cast<int> (emit_asm) +
+            static_cast<int> (emit_obj);
+
+        if (emit_modes > 1)
+        {
+            std::cerr << "Error: choose only one of --emit-llvm, --emit-asm, --emit-obj\n";
+            return 1;
+        }
+
+        // --emit-llvm / --emit-asm / --emit-obj
+        if (emit_modes == 1)
         {
             tc::MlirModule m = tc::graph_to_mlir (builder);
 
@@ -100,11 +121,12 @@ int main (int argc, char* argv[])
 
             tc::EmitOptions opts;
 
-            opts.output_kind = emit_llvm
-                ? tc::OutputKind::LLVM_IR
-                : tc::OutputKind::ASM;
+            if (emit_llvm)      opts.output_kind = tc::OutputKind::LLVM_IR;
+            else if (emit_asm)  opts.output_kind = tc::OutputKind::ASM;
+            else                opts.output_kind = tc::OutputKind::OBJ;
 
             opts.target_triple = target_triple.getValue();
+            opts.output_path = output_file.getValue();
 
             switch (opt_level)
             {

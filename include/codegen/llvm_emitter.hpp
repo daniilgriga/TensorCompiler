@@ -19,6 +19,7 @@ namespace tc
         std::string target_triple;                                    // "" = native
         std::string cpu;                                              // "" = "generic"
         std::string features;                                         // "" = no extra features
+        std::string output_path;                                      // "" = stdout (or "a.o" for OBJ)
         llvm::CodeGenOptLevel opt_level = llvm::CodeGenOptLevel::None; // -O0 default
         OutputKind output_kind = OutputKind::ASM;
     };
