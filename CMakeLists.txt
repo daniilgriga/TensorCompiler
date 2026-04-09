@@ -181,4 +181,29 @@ if (BUILD_TESTS)
 
     include (GoogleTest)
     gtest_discover_tests (tc_tests)
+
+    # codegen tests — only when MLIR/LLVM is available
+    if (BUILD_CODEGEN)
+        add_executable (tc_codegen_tests
+            tests/codegen_test.cpp
+        )
+
+        target_compile_options (tc_codegen_tests PRIVATE
+            ${COMMON_COMPILE_OPTIONS}
+            ${SANITIZE_FLAGS}
+            -Wno-unused-parameter
+        )
+
+        target_link_options (tc_codegen_tests PRIVATE
+            ${SANITIZE_FLAGS}
+        )
+
+        target_link_libraries (tc_codegen_tests PRIVATE
+            tc_codegen
+            GTest::gtest
+            GTest::gtest_main
+        )
+
+        gtest_discover_tests (tc_codegen_tests)
+    endif ()
 endif ()
