@@ -26,17 +26,18 @@ namespace tc
             std::vector<Value*> outputs,
             Attributes attributes)
             : op_type_(std::move(op_type)),
-            name_(std::move(name)),
-            inputs_(std::move(inputs)),
-            outputs_(std::move(outputs)),
-            attributes_(std::move(attributes))
+              name_(std::move(name)),
+              inputs_(std::move(inputs)),
+              outputs_(std::move(outputs)),
+              attributes_(std::move(attributes))
         {}
-        
+
         friend class GraphBuilder;
+
     public:
         const std::string& op_type () const { return op_type_; }
         const std::string& name () const { return name_; }
-        
+
         const std::vector<Value*>& inputs () const { return inputs_; }
         const std::vector<Value*>& outputs () const { return outputs_; }
 

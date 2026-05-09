@@ -198,7 +198,7 @@ namespace
         {
             for (const auto* val : node->inputs())
             {
-                // skip initializers — they are shown inside the node
+                // skip initializers - they are shown inside the node
                 if (init_names.count (val->name())) continue;
 
                 std::string src;

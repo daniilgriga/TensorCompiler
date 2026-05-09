@@ -60,8 +60,7 @@ namespace tc
                 if (!init.raw_data().empty())
                 {
                     const auto& rd = init.raw_data();
-                    builder.set_value_data (val,
-                        std::vector<uint8_t> (rd.begin(), rd.end()));
+                    builder.set_value_data (val, std::vector<uint8_t> (rd.begin(), rd.end()));
                 }
                 else
                 {
