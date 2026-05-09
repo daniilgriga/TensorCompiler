@@ -2,6 +2,11 @@
 
 #include <cstdio>
 #include <cstdlib>
+#include <vector>
+
+#include "mlir/ExecutionEngine/ExecutionEngine.h"
+#include "mlir/ExecutionEngine/OptUtils.h"
+#include "mlir/ExecutionEngine/RunnerUtils.h"
 
 #include "mlir/Target/LLVMIR/Dialect/Builtin/BuiltinToLLVMIRTranslation.h"
 #include "mlir/Target/LLVMIR/Dialect/LLVMIR/LLVMToLLVMIRTranslation.h"
@@ -272,6 +277,100 @@ namespace
             return emit_llvm_ir (*llvm_module, options);
 
         return emit_codegen_file (*llvm_module, *target_machine, options);
+    }
+
+    int run_jit (mlir::ModuleOp module, const RunOptions& options)
+    {
+        initialize_codegen_backends ();
+
+        // register dialect translations required by ExecutionEngine
+        mlir::registerBuiltinDialectTranslation (*module.getContext());
+        mlir::registerLLVMDialectTranslation (*module.getContext());
+
+        mlir::ExecutionEngineOptions eng_opts;
+        eng_opts.transformer = mlir::makeOptimizingTransformer (0, 0, nullptr);
+        eng_opts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Default;
+
+        auto maybe_engine = mlir::ExecutionEngine::create (module, eng_opts);
+        if (!maybe_engine)
+        {
+            llvm::errs() << "error: failed to create JIT engine: "
+                         << llvm::toString (maybe_engine.takeError()) << "\n";
+            return 1;
+        }
+        auto& engine = *maybe_engine;
+
+        // read input from binary file
+        const int64_t in_elems = options.N * options.C * options.H * options.W;
+        std::vector<float> input (static_cast<std::size_t> (in_elems));
+
+        if (!options.input_path.empty())
+        {
+            FILE* f = std::fopen (options.input_path.c_str(), "rb");
+            if (!f)
+            {
+                llvm::errs() << "error: cannot open input file '"
+                             << options.input_path << "'\n";
+                return 1;
+            }
+            if (static_cast<int64_t> (
+                    std::fread (input.data(), sizeof(float), in_elems, f)) != in_elems)
+            {
+                llvm::errs() << "error: expected " << in_elems
+                             << " floats in input file\n";
+                std::fclose (f);
+                return 1;
+            }
+            std::fclose (f);
+        }
+
+        // build input memref descriptor (rank-4, NCHW)
+        StridedMemRefType<float, 4> in_desc;
+        in_desc.basePtr = input.data();
+        in_desc.data    = input.data();
+        in_desc.offset  = 0;
+        in_desc.sizes[0] = options.N;
+        in_desc.sizes[1] = options.C;
+        in_desc.sizes[2] = options.H;
+        in_desc.sizes[3] = options.W;
+        in_desc.strides[0] = options.C * options.H * options.W;
+        in_desc.strides[1] = options.H * options.W;
+        in_desc.strides[2] = options.W;
+        in_desc.strides[3] = 1;
+
+        // build output memref descriptor (rank-2, [1 x out_elems])
+        const int64_t out_elems = options.out_elems > 0 ? options.out_elems : 1;
+        std::vector<float> output (static_cast<std::size_t> (out_elems), 0.0f);
+
+        StridedMemRefType<float, 2> out_desc;
+        out_desc.basePtr  = output.data();
+        out_desc.data     = output.data();
+        out_desc.offset   = 0;
+        out_desc.sizes[0] = 1;
+        out_desc.sizes[1] = out_elems;
+        out_desc.strides[0] = out_elems;
+        out_desc.strides[1] = 1;
+
+        // _mlir_ciface_main(void* out_descriptor, void* in_descriptor)
+        // Direct call with correct ABI — invokePacked can't handle (ptr, ptr) signature
+        auto sym = engine->lookup ("_mlir_ciface_main");
+        if (!sym)
+        {
+            llvm::errs() << "error: cannot find '_mlir_ciface_main': "
+                         << llvm::toString (sym.takeError()) << "\n";
+            return 1;
+        }
+
+        using CIfaceMain = void (*)(void*, void*);
+        auto fn = reinterpret_cast<CIfaceMain> (*sym);
+        fn (&out_desc, &in_desc);
+
+        // print output as space-separated floats
+        for (int64_t i = 0; i < out_elems; ++i)
+            llvm::outs() << out_desc.data[i]
+                         << (i + 1 < out_elems ? " " : "\n");
+
+        return 0;
     }
 
 } // namespace tc

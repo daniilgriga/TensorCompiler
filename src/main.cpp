@@ -48,6 +48,22 @@ static llvm::cl::opt<bool> emit_so (
     "emit-so",
     llvm::cl::desc ("Emit shared library (.so/.dylib) for AOT execution"));
 
+static llvm::cl::opt<bool> run_model (
+    "run",
+    llvm::cl::desc ("JIT-compile and run the model"));
+
+static llvm::cl::opt<std::string> input_file_path (
+    "input",
+    llvm::cl::desc ("Input binary file (raw float32) for --run"),
+    llvm::cl::value_desc ("file"),
+    llvm::cl::init (""));
+
+static llvm::cl::opt<int> in_N ("in-N", llvm::cl::desc("Input batch size"),    llvm::cl::init (1));
+static llvm::cl::opt<int> in_C ("in-C", llvm::cl::desc("Input channels"),      llvm::cl::init (1));
+static llvm::cl::opt<int> in_H ("in-H", llvm::cl::desc("Input height"),        llvm::cl::init (1));
+static llvm::cl::opt<int> in_W ("in-W", llvm::cl::desc("Input width"),         llvm::cl::init (1));
+static llvm::cl::opt<int> out_elems ("out-elems", llvm::cl::desc("Output element count"), llvm::cl::init (1));
+
 static llvm::cl::opt<bool> bare_ptr (
     "bare-ptr",
     llvm::cl::desc ("Use bare pointer calling convention (required for --emit-so)"));
@@ -103,6 +119,31 @@ int main (int argc, char* argv[])
             m.module->print (llvm::outs());
             llvm::outs() << "\n";
             return 0;
+        }
+
+        // --run
+        if (run_model)
+        {
+            tc::MlirModule m = tc::graph_to_mlir (builder);
+
+            tc::LoweringPipelineOptions pipeline_opts;
+            pipeline_opts.emit_c_interface = true;
+
+            if (mlir::failed (tc::run_lowering_pipeline (*m.module, pipeline_opts)))
+            {
+                std::cerr << "Error: lowering pipeline failed\n";
+                return 1;
+            }
+
+            tc::RunOptions run_opts;
+            run_opts.input_path = input_file_path.getValue();
+            run_opts.N = in_N;
+            run_opts.C = in_C;
+            run_opts.H = in_H;
+            run_opts.W = in_W;
+            run_opts.out_elems = out_elems;
+
+            return tc::run_jit (*m.module, run_opts);
         }
 
         const int emit_modes =

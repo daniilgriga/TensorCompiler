@@ -121,6 +121,7 @@ if (BUILD_CODEGEN)
         tc_core
         MLIR
         LLVM
+        MLIRExecutionEngine
     )
 endif ()
 
@@ -139,6 +140,7 @@ target_link_options (tc_main PRIVATE
 if (BUILD_CODEGEN)
     target_link_libraries (tc_main PRIVATE tc_core tc_codegen)
     target_compile_definitions (tc_main PRIVATE TC_WITH_CODEGEN)
+
 else ()
     target_link_libraries (tc_main PRIVATE tc_core)
 endif ()

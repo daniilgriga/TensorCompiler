@@ -25,6 +25,14 @@ namespace tc
         OutputKind output_kind = OutputKind::ASM;
     };
 
+    struct RunOptions
+    {
+        std::string input_path;   // raw float32 binary
+        int64_t N = 1, C = 1, H = 1, W = 1;  // input shape
+        int64_t out_elems = 0;    // total output elements
+    };
+
     int emit_output (mlir::ModuleOp module, const EmitOptions& options);
+    int run_jit    (mlir::ModuleOp module, const RunOptions& options);
 
 } // namespace tc
