@@ -27,9 +27,9 @@ namespace tc
 
     struct RunOptions
     {
-        std::string input_path;   // raw float32 binary
-        int64_t N = 1, C = 1, H = 1, W = 1;  // input shape
-        int64_t out_elems = 0;    // total output elements
+        std::string input_path;
+        int64_t N = 1, C = 1, H = 1, W = 1;
+        int64_t out_elems = 0;
     };
 
     int emit_output (mlir::ModuleOp module, const EmitOptions& options);

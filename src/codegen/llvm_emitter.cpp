@@ -283,7 +283,6 @@ namespace
     {
         initialize_codegen_backends ();
 
-        // register dialect translations required by ExecutionEngine
         mlir::registerBuiltinDialectTranslation (*module.getContext());
         mlir::registerLLVMDialectTranslation (*module.getContext());
 
@@ -300,7 +299,6 @@ namespace
         }
         auto& engine = *maybe_engine;
 
-        // read input from binary file
         const int64_t in_elems = options.N * options.C * options.H * options.W;
         std::vector<float> input (static_cast<std::size_t> (in_elems));
 
@@ -324,7 +322,6 @@ namespace
             std::fclose (f);
         }
 
-        // build input memref descriptor (rank-4, NCHW)
         StridedMemRefType<float, 4> in_desc;
         in_desc.basePtr = input.data();
         in_desc.data    = input.data();
@@ -338,7 +335,6 @@ namespace
         in_desc.strides[2] = options.W;
         in_desc.strides[3] = 1;
 
-        // build output memref descriptor (rank-2, [1 x out_elems])
         const int64_t out_elems = options.out_elems > 0 ? options.out_elems : 1;
         std::vector<float> output (static_cast<std::size_t> (out_elems), 0.0f);
 
@@ -351,8 +347,7 @@ namespace
         out_desc.strides[0] = out_elems;
         out_desc.strides[1] = 1;
 
-        // _mlir_ciface_main(void* out_descriptor, void* in_descriptor)
-        // Direct call with correct ABI — invokePacked can't handle (ptr, ptr) signature
+
         auto sym = engine->lookup ("_mlir_ciface_main");
         if (!sym)
         {
@@ -365,7 +360,6 @@ namespace
         auto fn = reinterpret_cast<CIfaceMain> (*sym);
         fn (&out_desc, &in_desc);
 
-        // print output as space-separated floats
         for (int64_t i = 0; i < out_elems; ++i)
             llvm::outs() << out_desc.data[i]
                          << (i + 1 < out_elems ? " " : "\n");
