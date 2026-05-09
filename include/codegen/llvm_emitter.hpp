@@ -11,7 +11,8 @@ namespace tc
     {
         LLVM_IR,  // --emit-llvm
         ASM,      // --emit-asm
-        OBJ       // --emit-obj
+        OBJ,      // --emit-obj
+        SO        // --emit-so (shared library, requires PIC)
     };
 
     struct EmitOptions

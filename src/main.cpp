@@ -44,9 +44,17 @@ static llvm::cl::opt<bool> emit_obj (
     "emit-obj",
     llvm::cl::desc ("Emit object file"));
 
+static llvm::cl::opt<bool> emit_so (
+    "emit-so",
+    llvm::cl::desc ("Emit shared library (.so/.dylib) for AOT execution"));
+
+static llvm::cl::opt<bool> bare_ptr (
+    "bare-ptr",
+    llvm::cl::desc ("Use bare pointer calling convention (required for --emit-so)"));
+
 static llvm::cl::opt<std::string> output_file (
     "o",
-    llvm::cl::desc ("Output file for --emit-llvm/--emit-asm/--emit-obj"),
+    llvm::cl::desc ("Output file for --emit-llvm/--emit-asm/--emit-obj/--emit-so"),
     llvm::cl::value_desc ("file"),
     llvm::cl::init (""));
 
@@ -100,20 +108,25 @@ int main (int argc, char* argv[])
         const int emit_modes =
             static_cast<int> (emit_llvm) +
             static_cast<int> (emit_asm) +
-            static_cast<int> (emit_obj);
+            static_cast<int> (emit_obj) +
+            static_cast<int> (emit_so);
 
         if (emit_modes > 1)
         {
-            std::cerr << "Error: choose only one of --emit-llvm, --emit-asm, --emit-obj\n";
+            std::cerr << "Error: choose only one of --emit-llvm, --emit-asm, --emit-obj, --emit-so\n";
             return 1;
         }
 
-        // --emit-llvm / --emit-asm / --emit-obj
+        // --emit-llvm / --emit-asm / --emit-obj / --emit-so
         if (emit_modes == 1)
         {
             tc::MlirModule m = tc::graph_to_mlir (builder);
 
-            if (mlir::failed (tc::run_lowering_pipeline (*m.module)))
+            tc::LoweringPipelineOptions pipeline_opts;
+            if (bare_ptr)
+                pipeline_opts.use_bare_ptr_call_conv = true;
+
+            if (mlir::failed (tc::run_lowering_pipeline (*m.module, pipeline_opts)))
             {
                 std::cerr << "Error: lowering pipeline failed\n";
                 return 1;
@@ -123,6 +136,7 @@ int main (int argc, char* argv[])
 
             if (emit_llvm)      opts.output_kind = tc::OutputKind::LLVM_IR;
             else if (emit_asm)  opts.output_kind = tc::OutputKind::ASM;
+            else if (emit_so)   opts.output_kind = tc::OutputKind::SO;
             else                opts.output_kind = tc::OutputKind::OBJ;
 
             opts.target_triple = target_triple.getValue();
