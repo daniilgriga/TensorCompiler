@@ -1,4 +1,8 @@
 #include <cstring>
+#include <dlfcn.h>
+#include <filesystem>
+#include <string>
+#include <system_error>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -8,13 +12,30 @@
 #include "codegen/mlir_gen.hpp"
 #include "graph/graph_builder.hpp"
 
-#if __has_include(<sanitizer/lsan_interface.h>)
-#include <sanitizer/lsan_interface.h>
-#else
-static void __lsan_disable() {}
-static void __lsan_enable()  {}
-#endif
+namespace
+{
+    using LsanHook = void (*)();
 
+    void call_lsan_hook_if_available (const char* symbol_name)
+    {
+        void* raw = dlsym (RTLD_DEFAULT, symbol_name);
+        if (!raw)
+            return;
+
+        auto hook = reinterpret_cast<LsanHook> (raw);
+        hook ();
+    }
+
+    void lsan_disable_if_available ()
+    {
+        call_lsan_hook_if_available ("__lsan_disable");
+    }
+
+    void lsan_enable_if_available ()
+    {
+        call_lsan_hook_if_available ("__lsan_enable");
+    }
+} // namespace
 namespace
 {
 
@@ -259,9 +280,40 @@ TEST(CodegenTest, UnsupportedOpThrows)
         {builder.find_value ("Y")});
 
     // MLIR ops leak when exception interrupts emit - suppress LSAN for this test
-    __lsan_disable();
+    lsan_disable_if_available ();
     EXPECT_THROW (tc::graph_to_mlir (builder), std::runtime_error);
-    __lsan_enable();
+    lsan_enable_if_available ();
+}
+
+TEST(CodegenTest, EmitObjCliWritesOutputFile)
+{
+    const std::filesystem::path model_path =
+        std::filesystem::path (TEST_MODELS_DIR) / "add.onnx";
+
+    std::error_code ec;
+    const std::filesystem::path output_path =
+        std::filesystem::temp_directory_path (ec) / "tc_emit_obj_test.o";
+    ASSERT_FALSE (ec);
+
+    std::filesystem::remove (output_path, ec);
+    ec.clear ();
+
+    std::string cmd;
+    cmd += "\"";
+    cmd += TC_MAIN_BIN;
+    cmd += "\" \"";
+    cmd += model_path.string ();
+    cmd += "\" --emit-obj -o \"";
+    cmd += output_path.string ();
+    cmd += "\" >/dev/null 2>/dev/null";
+
+    const int rc = std::system (cmd.c_str());
+    EXPECT_EQ (rc, 0);
+
+    ASSERT_TRUE (std::filesystem::exists (output_path));
+    EXPECT_GT (std::filesystem::file_size (output_path), 0u);
+
+    std::filesystem::remove (output_path, ec);
 }
 
 } // namespace
