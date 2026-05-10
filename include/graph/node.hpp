@@ -1,8 +1,10 @@
 #pragma once
 
+#include <optional>
 #include <string>
-#include <vector>
 #include <utility>
+#include <variant>
+#include <vector>
 
 #include "value.hpp"
 #include "attr.hpp"
@@ -43,10 +45,23 @@ namespace tc
 
         const Attributes& attributes () const { return attributes_; }
 
-        const AttrValue* attribute (const std::string& key) const
+        [[nodiscard]] const AttrValue* attribute (const std::string& key) const
         {
             auto it = attributes_.find(key);
             return (it == attributes_.end()) ? nullptr : &it->second;
+        }
+
+        template <AttrAlternative T>
+        [[nodiscard]] std::optional<T> attr_as (const std::string& key) const
+        {
+            auto it = attributes_.find(key);
+            if (it == attributes_.end())
+                return std::nullopt;
+
+            if (const T* val = std::get_if<T>(&it->second))
+                return *val;
+
+            return std::nullopt;
         }
     };
 } // namespace tc
