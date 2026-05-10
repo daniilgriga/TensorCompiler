@@ -1,3 +1,4 @@
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -576,17 +577,24 @@ private:
         const Value* shape_val = node.inputs()[1];
 
         // shape input must be a static int64 initializer
-        if (shape_val->data().empty())
+        const auto& shape_bytes = shape_val->data();
+        if (shape_bytes.empty())
             throw std::runtime_error (
                 "emit_reshape: shape input '" + shape_val->name() +
                 "' has no data - dynamic shapes not supported");
 
-        const auto* shape_data =
-            reinterpret_cast<const int64_t*> (shape_val->data().data());
-        int64_t shape_rank = static_cast<int64_t> (
-            shape_val->data().size() / sizeof (int64_t));
+        if (shape_bytes.size() % sizeof (int64_t) != 0)
+            throw std::runtime_error (
+                "emit_reshape: shape input '" + shape_val->name() +
+                "' has " + std::to_string (shape_bytes.size()) +
+                " bytes, not a multiple of sizeof(int64_t)");
 
-        llvm::SmallVector<int64_t> target_shape (shape_data, shape_data + shape_rank);
+        const int64_t shape_rank =
+            static_cast<int64_t> (shape_bytes.size() / sizeof (int64_t));
+
+        llvm::SmallVector<int64_t> target_shape (
+            static_cast<std::size_t> (shape_rank));
+        std::memcpy (target_shape.data(), shape_bytes.data(), shape_bytes.size());
 
         // build index-typed shape tensor: tensor.reshape requires <Nxindex>
         mlir::Type idx_type = b.getIndexType();
