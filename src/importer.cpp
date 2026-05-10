@@ -189,19 +189,24 @@ namespace tc
                 const auto& onnx_node = graph.node (node_idx);
 
                 std::vector<Value*> inputs;
+                inputs.reserve (static_cast<std::size_t> (onnx_node.input_size()));
+
+                bool seen_empty = false;
                 for (int i = 0; i < onnx_node.input_size(); ++i)
                 {
                     const auto& name = onnx_node.input (i);
-                    if (name.empty ())
+                    if (name.empty())
                     {
-                        inputs.push_back (builder.get_or_create_value (
-                            "__tc_empty__node" + std::to_string (node_idx)
-                            + "_" + std::to_string (i)));
+                        seen_empty = true;
+                        continue;
                     }
-                    else
-                    {
-                        inputs.push_back (builder.get_or_create_value (name));
-                    }
+                    if (seen_empty)
+                        throw std::runtime_error (
+                            "import_nodes: non-trailing empty input in node '" +
+                            onnx_node.name() + "' (op '" + onnx_node.op_type() +
+                            "'): input " + std::to_string (i) + " ('" + name +
+                            "') comes after an empty input slot");
+                    inputs.push_back (builder.get_or_create_value (name));
                 }
 
                 std::vector<Value*> outputs;
