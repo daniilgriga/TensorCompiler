@@ -1,6 +1,7 @@
 #include "codegen/lowering_pipeline.hpp"
 
 #include "mlir/Conversion/Passes.h"
+#include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Conversion/SCFToControlFlow/SCFToControlFlow.h"
 #include "mlir/Dialect/Arith/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Bufferization/IR/Bufferization.h"
@@ -11,6 +12,7 @@
 #include "mlir/Dialect/MemRef/Transforms/Passes.h"
 #include "mlir/Dialect/SCF/Transforms/BufferizableOpInterfaceImpl.h"
 #include "mlir/Dialect/Tensor/Transforms/BufferizableOpInterfaceImpl.h"
+#include "mlir/Dialect/LLVMIR/Transforms/Passes.h"
 #include "mlir/IR/DialectRegistry.h"
 #include "mlir/Pass/PassManager.h"
 #include "mlir/Transforms/Passes.h"
@@ -76,6 +78,10 @@ namespace tc
         mlir::ConvertFuncToLLVMPassOptions func_options;
         func_options.indexBitwidth = options.index_bitwidth;
         func_options.useBarePtrCallConv = options.use_bare_ptr_call_conv;
+
+        if (options.emit_c_interface)
+            pm.nest<mlir::func::FuncOp> ().addPass (
+                mlir::LLVM::createLLVMRequestCWrappersPass ());
 
         pm.addPass (mlir::createConvertFuncToLLVMPass (func_options));
         pm.addPass (mlir::createFinalizeMemRefToLLVMConversionPass (memref_options));

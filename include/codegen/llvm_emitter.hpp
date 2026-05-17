@@ -11,7 +11,8 @@ namespace tc
     {
         LLVM_IR,  // --emit-llvm
         ASM,      // --emit-asm
-        OBJ       // --emit-obj
+        OBJ,      // --emit-obj
+        SO        // --emit-so (shared library, requires PIC)
     };
 
     struct EmitOptions
@@ -24,6 +25,14 @@ namespace tc
         OutputKind output_kind = OutputKind::ASM;
     };
 
+    struct RunOptions
+    {
+        std::string input_path;
+        int64_t N = 1, C = 1, H = 1, W = 1;
+        int64_t out_elems = 0;
+    };
+
     int emit_output (mlir::ModuleOp module, const EmitOptions& options);
+    int run_jit    (mlir::ModuleOp module, const RunOptions& options);
 
 } // namespace tc

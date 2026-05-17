@@ -10,7 +10,9 @@ Currently implemented:
 - import ONNX model into an internal compute graph (`GraphBuilder`)
 - validate graph consistency (`verify`)
 - export graph to Graphviz `.dot` for visualization
-- lower graph to MLIR / LLVM IR / assembly / object file
+- lower graph to MLIR / LLVM IR / assembly / object file / shared library
+- JIT-execute compiled model with real inputs (`--run`)
+- end-to-end correctness verification against onnxruntime (`verify.py`)
 
 ## How to Install
 
@@ -122,6 +124,43 @@ cmake -S . -B build-codegen \
 ```bash
 ./build-codegen/tc_main tests/models/add.onnx --emit-obj
 ./build-codegen/tc_main tests/models/add.onnx --emit-obj -o output/add.o
+```
+
+### Emit Shared Library (AOT)
+
+Compile model to a shared library (`.dylib` on macOS, `.so` on Linux):
+
+```bash
+./build-codegen/tc_main tests/models/conv_relu_gemm.onnx --emit-so -o model.so
+```
+
+### Run Model (JIT)
+
+JIT-compile and execute the model with real input data:
+
+```bash
+# prepare input: raw float32 binary
+python3 -c "import numpy as np; np.ones((1,1,5,5), dtype=np.float32).tofile('input.bin')"
+
+./build-codegen/tc_main tests/models/conv_relu_gemm.onnx \
+    --run --input input.bin \
+    --in-N 1 --in-C 1 --in-H 5 --in-W 5 \
+    --out-elems 10
+```
+
+### Verify Correctness vs onnxruntime
+
+```bash
+pip install onnxruntime numpy
+python3 tests/verify.py tests/models/conv_relu_gemm.onnx
+```
+
+Expected output:
+```
+onnxruntime: [46.003456 46.003456 ...]
+tc_main:     [46.00346  46.00346  ...]
+max abs diff: 3.88e-06
+PASS  (tolerance 0.0001)
 ```
 
 ### Target + Optimization Level

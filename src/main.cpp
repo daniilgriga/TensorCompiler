@@ -44,9 +44,33 @@ static llvm::cl::opt<bool> emit_obj (
     "emit-obj",
     llvm::cl::desc ("Emit object file"));
 
+static llvm::cl::opt<bool> emit_so (
+    "emit-so",
+    llvm::cl::desc ("Emit shared library (.so/.dylib) for AOT execution"));
+
+static llvm::cl::opt<bool> run_model (
+    "run",
+    llvm::cl::desc ("JIT-compile and run the model"));
+
+static llvm::cl::opt<std::string> input_file_path (
+    "input",
+    llvm::cl::desc ("Input binary file (raw float32) for --run"),
+    llvm::cl::value_desc ("file"),
+    llvm::cl::init (""));
+
+static llvm::cl::opt<int> in_N ("in-N", llvm::cl::desc("Input batch size"),    llvm::cl::init (1));
+static llvm::cl::opt<int> in_C ("in-C", llvm::cl::desc("Input channels"),      llvm::cl::init (1));
+static llvm::cl::opt<int> in_H ("in-H", llvm::cl::desc("Input height"),        llvm::cl::init (1));
+static llvm::cl::opt<int> in_W ("in-W", llvm::cl::desc("Input width"),         llvm::cl::init (1));
+static llvm::cl::opt<int> out_elems ("out-elems", llvm::cl::desc("Output element count"), llvm::cl::init (1));
+
+static llvm::cl::opt<bool> bare_ptr (
+    "bare-ptr",
+    llvm::cl::desc ("Use bare pointer calling convention (required for --emit-so)"));
+
 static llvm::cl::opt<std::string> output_file (
     "o",
-    llvm::cl::desc ("Output file for --emit-llvm/--emit-asm/--emit-obj"),
+    llvm::cl::desc ("Output file for --emit-llvm/--emit-asm/--emit-obj/--emit-so"),
     llvm::cl::value_desc ("file"),
     llvm::cl::init (""));
 
@@ -97,23 +121,53 @@ int main (int argc, char* argv[])
             return 0;
         }
 
+        // --run
+        if (run_model)
+        {
+            tc::MlirModule m = tc::graph_to_mlir (builder);
+
+            tc::LoweringPipelineOptions pipeline_opts;
+            pipeline_opts.emit_c_interface = true;
+
+            if (mlir::failed (tc::run_lowering_pipeline (*m.module, pipeline_opts)))
+            {
+                std::cerr << "Error: lowering pipeline failed\n";
+                return 1;
+            }
+
+            tc::RunOptions run_opts;
+            run_opts.input_path = input_file_path.getValue();
+            run_opts.N = in_N;
+            run_opts.C = in_C;
+            run_opts.H = in_H;
+            run_opts.W = in_W;
+            run_opts.out_elems = out_elems;
+
+            return tc::run_jit (*m.module, run_opts);
+        }
+
         const int emit_modes =
             static_cast<int> (emit_llvm) +
             static_cast<int> (emit_asm) +
-            static_cast<int> (emit_obj);
+            static_cast<int> (emit_obj) +
+            static_cast<int> (emit_so);
 
         if (emit_modes > 1)
         {
-            std::cerr << "Error: choose only one of --emit-llvm, --emit-asm, --emit-obj\n";
+            std::cerr << "Error: choose only one of --emit-llvm, --emit-asm, --emit-obj, --emit-so\n";
             return 1;
         }
 
-        // --emit-llvm / --emit-asm / --emit-obj
+        // --emit-llvm / --emit-asm / --emit-obj / --emit-so
         if (emit_modes == 1)
         {
             tc::MlirModule m = tc::graph_to_mlir (builder);
 
-            if (mlir::failed (tc::run_lowering_pipeline (*m.module)))
+            tc::LoweringPipelineOptions pipeline_opts;
+            if (bare_ptr)
+                pipeline_opts.use_bare_ptr_call_conv = true;
+
+            if (mlir::failed (tc::run_lowering_pipeline (*m.module, pipeline_opts)))
             {
                 std::cerr << "Error: lowering pipeline failed\n";
                 return 1;
@@ -123,6 +177,7 @@ int main (int argc, char* argv[])
 
             if (emit_llvm)      opts.output_kind = tc::OutputKind::LLVM_IR;
             else if (emit_asm)  opts.output_kind = tc::OutputKind::ASM;
+            else if (emit_so)   opts.output_kind = tc::OutputKind::SO;
             else                opts.output_kind = tc::OutputKind::OBJ;
 
             opts.target_triple = target_triple.getValue();
