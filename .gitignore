@@ -4,3 +4,6 @@ build*/
 
 # small generated test models
 !tests/models/*.onnx
+
+# large pretrained models — download manually, do not commit
+tests/models/resnet18*.onnx

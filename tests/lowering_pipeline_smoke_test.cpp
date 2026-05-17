@@ -98,10 +98,7 @@ module {
 
         ASSERT_TRUE (module);
 
-        tc::LoweringPipelineOptions options;
-        options.index_bitwidth = 64;
-
-        ASSERT_TRUE (mlir::succeeded (tc::run_lowering_pipeline (*module, options)));
+        ASSERT_TRUE (mlir::succeeded (tc::run_lowering_pipeline (*module)));
 
         std::string lowered = print_module (*module);
         EXPECT_NE (lowered.find ("llvm.func"), std::string::npos);

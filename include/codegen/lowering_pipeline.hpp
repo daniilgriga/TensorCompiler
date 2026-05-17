@@ -9,13 +9,11 @@ namespace tc
 {
     struct LoweringPipelineOptions
     {
-        bool enable_verifier = true;
-        bool bufferize_function_boundaries = true;
-        unsigned index_bitwidth = 0;
+        // bare pointer ABI: func takes float* instead of full memref descriptor.
         bool use_bare_ptr_call_conv = false;
-        bool use_aligned_alloc = false;
-        bool emit_c_interface = false;  // generate _mlir_ciface_* wrappers for JIT
-        std::string llvm_data_layout;
+
+        // emit _mlir_ciface_* C-interface wrappers required by ExecutionEngine::invoke
+        bool emit_c_interface = false;
     };
 
     mlir::LogicalResult run_lowering_pipeline (
