@@ -6,6 +6,7 @@
 
 namespace tc
 {
+
 bool GraphBuilder::contains_node_ptr (const Node* node) const
 {
     for (const auto& n_uptr : nodes_)

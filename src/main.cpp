@@ -88,6 +88,18 @@ static llvm::cl::opt<std::string> target_triple (
 
 #endif // TC_WITH_CODEGEN
 
+#ifndef TC_WITH_CODEGEN
+namespace
+{
+    void print_usage (const char* prog)
+    {
+        std::cerr << "Usage:\n"
+                  << "  " << prog << " <model.onnx>                print graph stats\n"
+                  << "  " << prog << " <model.onnx> --dot <file>   export graph to Graphviz dot\n";
+    }
+} // namespace
+#endif
+
 int main (int argc, char* argv[])
 {
 #ifdef TC_WITH_CODEGEN
@@ -211,9 +223,7 @@ int main (int argc, char* argv[])
 
     if (argc < 2)
     {
-        std::cerr << "Usage:\n"
-                  << "  tc_main <model.onnx>               print graph stats\n"
-                  << "  tc_main <model.onnx> --dot <file>  export graph to Graphviz dot\n";
+        print_usage (argv[0]);
         return 1;
     }
 

@@ -1,3 +1,4 @@
+#include <cstring>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -356,19 +357,10 @@ private:
         auto a_type  = mlir::cast<mlir::RankedTensorType> (a.getType());
         auto bv_type = mlir::cast<mlir::RankedTensorType> (bv.getType());
 
-        float alpha  = 1.0f;
-        float beta   = 1.0f;
-        int64_t transA = 0;
-        int64_t transB = 0;
-
-        if (const auto* v = node.attribute ("alpha"))
-            alpha  = std::get<float> (*v);
-        if (const auto* v = node.attribute ("beta"))
-            beta   = std::get<float> (*v);
-        if (const auto* v = node.attribute ("transA"))
-            transA = std::get<int64_t> (*v);
-        if (const auto* v = node.attribute ("transB"))
-            transB = std::get<int64_t> (*v);
+        float   alpha  = node.attr_as<float>   ("alpha") .value_or (1.0f);
+        float   beta   = node.attr_as<float>   ("beta")  .value_or (1.0f);
+        int64_t transA = node.attr_as<int64_t> ("transA").value_or (0);
+        int64_t transB = node.attr_as<int64_t> ("transB").value_or (0);
 
         // output shape [M, N]
         int64_t M = transA ? a_type.getShape()[1] : a_type.getShape()[0];
@@ -463,16 +455,10 @@ private:
         llvm::ArrayRef<int64_t> f_shape  = filter_type.getShape(); // [F, C, Kh, Kw]
 
         // read attributes with ONNX defaults
-        std::vector<int64_t> strides   = {1, 1};
-        std::vector<int64_t> dilations = {1, 1};
-        std::vector<int64_t> pads      = {0, 0, 0, 0};
-
-        if (const auto* v = node.attribute ("strides"))
-            strides   = std::get<std::vector<int64_t>> (*v);
-        if (const auto* v = node.attribute ("dilations"))
-            dilations = std::get<std::vector<int64_t>> (*v);
-        if (const auto* v = node.attribute ("pads"))
-            pads      = std::get<std::vector<int64_t>> (*v);
+        using Ints = std::vector<int64_t>;
+        auto strides   = node.attr_as<Ints> ("strides")  .value_or (Ints{1, 1});
+        auto dilations = node.attr_as<Ints> ("dilations").value_or (Ints{1, 1});
+        auto pads      = node.attr_as<Ints> ("pads")     .value_or (Ints{0, 0, 0, 0});
         // pads: [top, left, bottom, right]
 
         int64_t N  = in_shape[0];
@@ -591,17 +577,24 @@ private:
         const Value* shape_val = node.inputs()[1];
 
         // shape input must be a static int64 initializer
-        if (shape_val->data().empty())
+        const auto& shape_bytes = shape_val->data();
+        if (shape_bytes.empty())
             throw std::runtime_error (
                 "emit_reshape: shape input '" + shape_val->name() +
                 "' has no data - dynamic shapes not supported");
 
-        const auto* shape_data =
-            reinterpret_cast<const int64_t*> (shape_val->data().data());
-        int64_t shape_rank = static_cast<int64_t> (
-            shape_val->data().size() / sizeof (int64_t));
+        if (shape_bytes.size() % sizeof (int64_t) != 0)
+            throw std::runtime_error (
+                "emit_reshape: shape input '" + shape_val->name() +
+                "' has " + std::to_string (shape_bytes.size()) +
+                " bytes, not a multiple of sizeof(int64_t)");
 
-        llvm::SmallVector<int64_t> target_shape (shape_data, shape_data + shape_rank);
+        const int64_t shape_rank =
+            static_cast<int64_t> (shape_bytes.size() / sizeof (int64_t));
+
+        llvm::SmallVector<int64_t> target_shape (
+            static_cast<std::size_t> (shape_rank));
+        std::memcpy (target_shape.data(), shape_bytes.data(), shape_bytes.size());
 
         // build index-typed shape tensor: tensor.reshape requires <Nxindex>
         mlir::Type idx_type = b.getIndexType();

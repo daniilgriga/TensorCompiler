@@ -115,7 +115,8 @@ namespace tc
             value->set_data(std::move(data));
         }
 
-        Node* add_node (std::string op_type,
+        Node* add_node(
+               std::string op_type,
                std::vector<Value*> inputs,
                std::vector<Value*> outputs,
                Attributes attrs = {},
@@ -137,6 +138,7 @@ namespace tc
                 std::move(outputs),
                 std::move(attrs)
                 )));
+
             Node* node = nodes_.back().get();
 
             for (Value* in : node->inputs())
