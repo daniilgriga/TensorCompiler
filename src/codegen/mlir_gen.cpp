@@ -1,4 +1,5 @@
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <unordered_map>
@@ -196,6 +197,7 @@ private:
         if (op == "Gemm")    { emit_gemm        (b, loc, node);     return; }
         if (op == "Conv")    { emit_conv        (b, loc, node);     return; }
         if (op == "Reshape") { emit_reshape     (b, loc, node);     return; }
+        if (op == "MaxPool") { emit_maxpool     (b, loc, node);     return; }
 
         throw std::runtime_error ("emit_node: unsupported op '" + op + "'");
     }
@@ -276,6 +278,25 @@ private:
             zero_attr = b.getIntegerAttr (elem, 0);
 
         auto splat = mlir::SplatElementsAttr::get (type, zero_attr);
+
+        return mlir::arith::ConstantOp::create (b, loc, type, splat);
+    }
+
+    // tensor filled with -inf (float) or INT_MIN (int) - init slot for max-pooling
+    mlir::Value make_neg_inf_tensor (mlir::OpBuilder& b, mlir::Location loc,
+                                     llvm::ArrayRef<int64_t> shape, mlir::Type elem)
+    {
+        auto type = mlir::RankedTensorType::get (shape, elem);
+        mlir::Attribute val_attr;
+        if (llvm::isa<mlir::FloatType> (elem))
+            val_attr = b.getFloatAttr (elem, -std::numeric_limits<double>::infinity());
+        else
+            val_attr = b.getIntegerAttr (
+                elem,
+                llvm::APInt::getSignedMinValue (
+                    llvm::cast<mlir::IntegerType> (elem).getWidth()).getSExtValue());
+
+        auto splat = mlir::SplatElementsAttr::get (type, val_attr);
 
         return mlir::arith::ConstantOp::create (b, loc, type, splat);
     }
@@ -684,6 +705,90 @@ private:
         mlir::linalg::YieldOp::create (body_b, loc, mlir::ValueRange{max_val});
 
         value_map_[node.outputs()[0]->name()] = generic_op.getResult (0);
+    }
+
+    void emit_maxpool (mlir::OpBuilder& b, mlir::Location loc, const Node& node)
+    {
+        if (node.inputs().size() < 1 || node.outputs().size() < 1)
+            throw std::runtime_error ("emit_maxpool: expected 1 input and 1 output");
+
+        mlir::Value input = lookup (node.inputs()[0]->name());
+        auto in_type = mlir::cast<mlir::RankedTensorType> (input.getType());
+        auto in_shape = in_type.getShape();   // [N, C, H, W]
+        mlir::Type elem = in_type.getElementType();
+
+        using Ints = std::vector<int64_t>;
+        auto kernel_shape = node.attr_as<Ints> ("kernel_shape").value_or (Ints{1, 1});
+        auto strides      = node.attr_as<Ints> ("strides")     .value_or (Ints{1, 1});
+        auto dilations    = node.attr_as<Ints> ("dilations")   .value_or (Ints{1, 1});
+        auto pads         = node.attr_as<Ints> ("pads")        .value_or (Ints{0, 0, 0, 0});
+        // pads: [top, left, bottom, right]
+
+        int64_t N = in_shape[0], C  = in_shape[1];
+        int64_t H = in_shape[2], W  = in_shape[3];
+        int64_t Kh = kernel_shape[0], Kw = kernel_shape[1];
+
+        int64_t Ho = (H + pads[0] + pads[2] - dilations[0] * (Kh - 1) - 1) / strides[0] + 1;
+        int64_t Wo = (W + pads[1] + pads[3] - dilations[1] * (Kw - 1) - 1) / strides[1] + 1;
+
+        // pad with -inf so padded positions don't affect the max reduction
+        if (pads[0] || pads[1] || pads[2] || pads[3])
+        {
+            llvm::SmallVector<int64_t> padded_shape = {
+                N, C,
+                H + pads[0] + pads[2],
+                W + pads[1] + pads[3]
+            };
+            auto padded_type = mlir::RankedTensorType::get (padded_shape, elem);
+
+            llvm::SmallVector<mlir::Value> low_vals = {
+                mlir::arith::ConstantIndexOp::create (b, loc, 0),
+                mlir::arith::ConstantIndexOp::create (b, loc, 0),
+                mlir::arith::ConstantIndexOp::create (b, loc, pads[0]),
+                mlir::arith::ConstantIndexOp::create (b, loc, pads[1])
+            };
+            llvm::SmallVector<mlir::Value> high_vals = {
+                mlir::arith::ConstantIndexOp::create (b, loc, 0),
+                mlir::arith::ConstantIndexOp::create (b, loc, 0),
+                mlir::arith::ConstantIndexOp::create (b, loc, pads[2]),
+                mlir::arith::ConstantIndexOp::create (b, loc, pads[3])
+            };
+
+            auto pad_op = mlir::tensor::PadOp::create (
+                b, loc, padded_type, input,
+                mlir::ValueRange (low_vals), mlir::ValueRange (high_vals));
+
+            mlir::Block* body = &pad_op.getRegion().emplaceBlock();
+            for (int64_t i = 0; i < 4; ++i)
+                body->addArgument (b.getIndexType(), loc);
+
+            mlir::OpBuilder bb (body, body->end());
+            mlir::Value neg_inf = mlir::arith::ConstantOp::create (
+                bb, loc, elem,
+                bb.getFloatAttr (elem, -std::numeric_limits<double>::infinity())).getResult();
+            mlir::tensor::YieldOp::create (bb, loc, neg_inf);
+
+            input = pad_op.getResult();
+        }
+
+        // fake kernel [Kh, Kw] - linalg.pooling_nchw_max needs it only for shape
+        mlir::Value fake_kernel = make_zero_tensor (b, loc, {Kh, Kw}, elem);
+
+        // output initialized with -inf so max accumulation is correct
+        mlir::Value out     = make_neg_inf_tensor (b, loc, {N, C, Ho, Wo}, elem);
+        auto        out_type = mlir::RankedTensorType::get ({N, C, Ho, Wo}, elem);
+
+        mlir::Value result =
+            mlir::linalg::PoolingNchwMaxOp::create (
+                b, loc,
+                mlir::TypeRange{out_type},
+                mlir::ValueRange{input, fake_kernel},
+                mlir::ValueRange{out},
+                b.getDenseI64ArrayAttr (strides),
+                b.getDenseI64ArrayAttr (dilations))
+            .getResult (0);
+
+        value_map_[node.outputs()[0]->name()] = result;
     }
 };
 

@@ -286,8 +286,9 @@ namespace
         mlir::registerBuiltinDialectTranslation (*module.getContext());
         mlir::registerLLVMDialectTranslation (*module.getContext());
 
+        auto transformer = mlir::makeOptimizingTransformer (0, 0, nullptr);
         mlir::ExecutionEngineOptions eng_opts;
-        eng_opts.transformer = mlir::makeOptimizingTransformer (0, 0, nullptr);
+        eng_opts.transformer = transformer;
         eng_opts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Default;
 
         auto maybe_engine = mlir::ExecutionEngine::create (module, eng_opts);
