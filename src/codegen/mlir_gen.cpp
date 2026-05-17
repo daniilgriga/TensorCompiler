@@ -197,7 +197,8 @@ private:
         if (op == "Gemm")    { emit_gemm        (b, loc, node);     return; }
         if (op == "Conv")    { emit_conv        (b, loc, node);     return; }
         if (op == "Reshape") { emit_reshape     (b, loc, node);     return; }
-        if (op == "MaxPool") { emit_maxpool     (b, loc, node);     return; }
+        if (op == "MaxPool")           { emit_maxpool         (b, loc, node); return; }
+        if (op == "GlobalAveragePool") { emit_global_avg_pool (b, loc, node); return; }
 
         throw std::runtime_error ("emit_node: unsupported op '" + op + "'");
     }
@@ -787,6 +788,73 @@ private:
                 b.getDenseI64ArrayAttr (strides),
                 b.getDenseI64ArrayAttr (dilations))
             .getResult (0);
+
+        value_map_[node.outputs()[0]->name()] = result;
+    }
+
+    void emit_global_avg_pool (mlir::OpBuilder& b, mlir::Location loc, const Node& node)
+    {
+        if (node.inputs().size() < 1 || node.outputs().size() < 1)
+            throw std::runtime_error ("emit_global_avg_pool: expected 1 input and 1 output");
+
+        mlir::Value input = lookup (node.inputs()[0]->name());
+        auto in_type = mlir::cast<mlir::RankedTensorType> (input.getType());
+        auto in_shape = in_type.getShape();  // [N, C, H, W]
+        mlir::Type elem = in_type.getElementType();
+
+        int64_t N = in_shape[0], C = in_shape[1];
+        int64_t H = in_shape[2], W = in_shape[3];
+
+        // step 1: sum over spatial dims H and W into [N, C]
+        // input map:  (n, c, h, w) -> (n, c, h, w)
+        // output map: (n, c, h, w) -> (n, c)  - projects out h, w (reduction dims)
+        mlir::AffineMap in_map =
+            mlir::AffineMap::getMultiDimIdentityMap (4, ctx_.get());
+        mlir::AffineMap out_map =
+            mlir::AffineMap::get (4, 0,
+                {mlir::getAffineDimExpr (0, ctx_.get()),
+                 mlir::getAffineDimExpr (1, ctx_.get())},
+                ctx_.get());
+
+        llvm::SmallVector<mlir::utils::IteratorType> iters = {
+            mlir::utils::IteratorType::parallel,
+            mlir::utils::IteratorType::parallel,
+            mlir::utils::IteratorType::reduction,
+            mlir::utils::IteratorType::reduction
+        };
+
+        auto sum_type = mlir::RankedTensorType::get ({N, C}, elem);
+        mlir::Value sum_out = make_zero_tensor (b, loc, {N, C}, elem);
+
+        auto sum_op = mlir::linalg::GenericOp::create (
+            b, loc,
+            mlir::TypeRange{sum_type},
+            mlir::ValueRange{input},
+            mlir::ValueRange{sum_out},
+            llvm::SmallVector<mlir::AffineMap>{in_map, out_map},
+            iters, "", "");
+
+        mlir::Block* body = &sum_op.getRegion().emplaceBlock();
+        body->addArgument (elem, loc);  // input scalar
+        body->addArgument (elem, loc);  // accumulator
+
+        mlir::OpBuilder bb (body, body->end());
+        mlir::Value added = mlir::arith::AddFOp::create (
+            bb, loc, body->getArgument (0), body->getArgument (1)).getResult();
+        mlir::linalg::YieldOp::create (bb, loc, mlir::ValueRange{added});
+
+        // step 2: divide by H*W (multiply by 1/(H*W))
+        mlir::Value averaged =
+            scale_tensor (b, loc, sum_op.getResult (0),
+                          1.0 / static_cast<double> (H * W));
+
+        // step 3: expand [N, C] -> [N, C, 1, 1] to match ONNX output shape
+        auto result_type = mlir::RankedTensorType::get ({N, C, 1, 1}, elem);
+        llvm::SmallVector<mlir::ReassociationIndices> reassoc = {{0}, {1, 2, 3}};
+
+        mlir::Value result =
+            mlir::tensor::ExpandShapeOp::create (b, loc, result_type, averaged, reassoc)
+            .getResult();
 
         value_map_[node.outputs()[0]->name()] = result;
     }
