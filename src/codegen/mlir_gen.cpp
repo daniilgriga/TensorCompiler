@@ -201,7 +201,8 @@ private:
         if (op == "Reshape") { emit_reshape     (b, loc, node);     return; }
         if (op == "MaxPool")           { emit_maxpool         (b, loc, node); return; }
         if (op == "GlobalAveragePool")   { emit_global_avg_pool (b, loc, node); return; }
-        if (op == "BatchNormalization")  { emit_batchnorm       (b, loc, node); return; }
+        if (op == "BatchNormalization")  { emit_batchnorm (b, loc, node); return; }
+        if (op == "Softmax")             { emit_softmax   (b, loc, node); return; }
 
         throw std::runtime_error ("emit_node: unsupported op '" + op + "'");
     }
@@ -934,6 +935,128 @@ private:
         mlir::linalg::YieldOp::create (bb, loc, mlir::ValueRange{result});
 
         value_map_[node.outputs()[0]->name()] = generic.getResult (0);
+    }
+
+    void emit_softmax (mlir::OpBuilder& b, mlir::Location loc, const Node& node)
+    {
+        if (node.inputs().size() < 1 || node.outputs().size() < 1)
+            throw std::runtime_error ("emit_softmax: expected 1 input and 1 output");
+
+        mlir::Value input  = lookup (node.inputs()[0]->name());
+        auto        x_type = mlir::cast<mlir::RankedTensorType> (input.getType());
+        int64_t     rank   = x_type.getRank();
+        mlir::Type  elem   = x_type.getElementType();
+        auto        shape  = x_type.getShape();
+
+        int64_t axis = node.attr_as<int64_t> ("axis").value_or (-1);
+        if (axis < 0) axis += rank;
+        if (axis < 0 || axis >= rank)
+            throw std::runtime_error ("emit_softmax: axis out of range");
+
+        // reduced shape: all dims except 'axis'
+        llvm::SmallVector<int64_t> reduced_shape;
+        for (int64_t i = 0; i < rank; ++i)
+            if (i != axis) reduced_shape.push_back (shape[i]);
+
+        auto reduced_type = mlir::RankedTensorType::get (reduced_shape, elem);
+
+        // affine maps
+        mlir::AffineMap identity = mlir::AffineMap::getMultiDimIdentityMap (rank, ctx_.get());
+
+        // map that projects out the 'axis' dimension: (d0..dR-1) -> (d0..d_{axis-1}, d_{axis+1}..dR-1)
+        llvm::SmallVector<mlir::AffineExpr> proj_exprs;
+        for (int64_t i = 0; i < rank; ++i)
+            if (i != axis) proj_exprs.push_back (mlir::getAffineDimExpr (i, ctx_.get()));
+        mlir::AffineMap proj_map = mlir::AffineMap::get (rank, 0, proj_exprs, ctx_.get());
+
+        // iterator types for reduction over 'axis'
+        llvm::SmallVector<mlir::utils::IteratorType> iters_reduce (
+            rank, mlir::utils::IteratorType::parallel);
+        iters_reduce[static_cast<std::size_t> (axis)] = mlir::utils::IteratorType::reduction;
+
+        // iterator types for elementwise ops
+        llvm::SmallVector<mlir::utils::IteratorType> iters_par (
+            rank, mlir::utils::IteratorType::parallel);
+
+        // step 1: max over 'axis' for numerical stability
+        mlir::Value max_init = make_neg_inf_tensor (b, loc, reduced_shape, elem);
+
+        auto max_op = mlir::linalg::GenericOp::create (
+            b, loc, mlir::TypeRange{reduced_type},
+            mlir::ValueRange{input}, mlir::ValueRange{max_init},
+            llvm::SmallVector<mlir::AffineMap>{identity, proj_map},
+            iters_reduce, "", "");
+        {
+            mlir::Block* bd = &max_op.getRegion().emplaceBlock();
+            bd->addArgument (elem, loc);
+            bd->addArgument (elem, loc);
+            mlir::OpBuilder bb (bd, bd->end());
+            mlir::Value mx = mlir::arith::MaximumFOp::create (
+                bb, loc, bd->getArgument (0), bd->getArgument (1)).getResult();
+            mlir::linalg::YieldOp::create (bb, loc, mlir::ValueRange{mx});
+        }
+        mlir::Value max_val = max_op.getResult (0);
+
+        // step 2: exp(x - max), broadcasts max over 'axis'
+        mlir::Value exp_out = make_empty_like (b, loc, input);
+
+        auto exp_op = mlir::linalg::GenericOp::create (
+            b, loc, mlir::TypeRange{x_type},
+            mlir::ValueRange{input, max_val}, mlir::ValueRange{exp_out},
+            llvm::SmallVector<mlir::AffineMap>{identity, proj_map, identity},
+            iters_par, "", "");
+        {
+            mlir::Block* bd = &exp_op.getRegion().emplaceBlock();
+            bd->addArgument (elem, loc);  // x
+            bd->addArgument (elem, loc);  // max
+            bd->addArgument (elem, loc);  // output slot
+            mlir::OpBuilder bb (bd, bd->end());
+            mlir::Value shifted = mlir::arith::SubFOp::create (
+                bb, loc, bd->getArgument (0), bd->getArgument (1)).getResult();
+            mlir::Value exp_val = mlir::math::ExpOp::create (bb, loc, shifted).getResult();
+            mlir::linalg::YieldOp::create (bb, loc, mlir::ValueRange{exp_val});
+        }
+        mlir::Value exp_vals = exp_op.getResult (0);
+
+        // step 3: sum of exp over 'axis'
+        mlir::Value sum_init = make_zero_tensor (b, loc, reduced_shape, elem);
+
+        auto sum_op = mlir::linalg::GenericOp::create (
+            b, loc, mlir::TypeRange{reduced_type},
+            mlir::ValueRange{exp_vals}, mlir::ValueRange{sum_init},
+            llvm::SmallVector<mlir::AffineMap>{identity, proj_map},
+            iters_reduce, "", "");
+        {
+            mlir::Block* bd = &sum_op.getRegion().emplaceBlock();
+            bd->addArgument (elem, loc);
+            bd->addArgument (elem, loc);
+            mlir::OpBuilder bb (bd, bd->end());
+            mlir::Value s = mlir::arith::AddFOp::create (
+                bb, loc, bd->getArgument (0), bd->getArgument (1)).getResult();
+            mlir::linalg::YieldOp::create (bb, loc, mlir::ValueRange{s});
+        }
+        mlir::Value sum_val = sum_op.getResult (0);
+
+        // step 4: divide exp by sum, broadcasts sum over 'axis'
+        mlir::Value div_out = make_empty_like (b, loc, input);
+
+        auto div_op = mlir::linalg::GenericOp::create (
+            b, loc, mlir::TypeRange{x_type},
+            mlir::ValueRange{exp_vals, sum_val}, mlir::ValueRange{div_out},
+            llvm::SmallVector<mlir::AffineMap>{identity, proj_map, identity},
+            iters_par, "", "");
+        {
+            mlir::Block* bd = &div_op.getRegion().emplaceBlock();
+            bd->addArgument (elem, loc);  // exp
+            bd->addArgument (elem, loc);  // sum
+            bd->addArgument (elem, loc);  // output slot
+            mlir::OpBuilder bb (bd, bd->end());
+            mlir::Value d = mlir::arith::DivFOp::create (
+                bb, loc, bd->getArgument (0), bd->getArgument (1)).getResult();
+            mlir::linalg::YieldOp::create (bb, loc, mlir::ValueRange{d});
+        }
+
+        value_map_[node.outputs()[0]->name()] = div_op.getResult (0);
     }
 };
 
