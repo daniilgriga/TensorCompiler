@@ -16,6 +16,7 @@
 #include "llvm/IR/LegacyPassManager.h"
 #include "llvm/MC/TargetRegistry.h"
 #include "llvm/Passes/PassBuilder.h"
+#include "llvm/Support/DynamicLibrary.h"
 #include "llvm/Support/FileSystem.h"
 #include "llvm/Support/raw_ostream.h"
 #include "llvm/Support/TargetSelect.h"
@@ -290,6 +291,20 @@ namespace
         mlir::ExecutionEngineOptions eng_opts;
         eng_opts.transformer = transformer;
         eng_opts.jitCodeGenOptLevel = llvm::CodeGenOptLevel::Default;
+        // memrefCopy and other runtime helpers live in libmlir_runner_utils
+        // load MLIR runtime helpers so the JIT can resolve memrefCopy etc.
+        for (const char* lib : {"libmlir_runner_utils",
+                                "libmlir_c_runner_utils"})
+        {
+            std::string path = std::string (TC_LLVM_LIB_DIR) + "/" + lib +
+#ifdef __APPLE__
+                               ".dylib";
+#else
+                               ".so";
+#endif
+            if (llvm::sys::DynamicLibrary::LoadLibraryPermanently (path.c_str()))
+                llvm::errs() << "warning: could not load " << path << "\n";
+        }
 
         auto maybe_engine = mlir::ExecutionEngine::create (module, eng_opts);
         if (!maybe_engine)

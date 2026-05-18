@@ -144,8 +144,35 @@ private:
             if (it == value_map_.end())
                 throw std::runtime_error (
                     "emit_func: output value not found: " + v->name());
-            results.push_back (it->second);
-            res_types.push_back (it->second.getType());
+
+            mlir::Value out_val = it->second;
+            auto tensor_type = llvm::cast<mlir::RankedTensorType> (out_val.getType());
+            int64_t rank = tensor_type.getRank();
+
+            // normalise to rank-2 [batch, rest] so run_jit always receives a
+            // StridedMemRefType<float,2> descriptor via the C interface
+            if (rank > 2)
+            {
+                llvm::ArrayRef<int64_t> dims = tensor_type.getShape();
+                int64_t outer = dims[0];
+                int64_t inner = 1;
+
+                for (int64_t i = 1; i < rank; ++i) inner *= dims[i];
+
+                auto flat_type = mlir::RankedTensorType::get (
+                    {outer, inner}, tensor_type.getElementType());
+                llvm::SmallVector<mlir::ReassociationIndices> reassoc (2);
+                reassoc[0] = {0};
+
+                for (int64_t i = 1; i < rank; ++i)
+                    reassoc[1].push_back (i);
+
+                out_val = mlir::tensor::CollapseShapeOp::create (
+                    body_builder, loc, flat_type, out_val, reassoc);
+            }
+
+            results.push_back (out_val);
+            res_types.push_back (out_val.getType());
         }
 
         mlir::func::ReturnOp::create (body_builder, loc, results);
@@ -203,6 +230,7 @@ private:
         if (op == "GlobalAveragePool")   { emit_global_avg_pool (b, loc, node); return; }
         if (op == "BatchNormalization")  { emit_batchnorm (b, loc, node); return; }
         if (op == "Softmax")             { emit_softmax   (b, loc, node); return; }
+        if (op == "Flatten")             { emit_flatten   (b, loc, node); return; }
 
         throw std::runtime_error ("emit_node: unsupported op '" + op + "'");
     }
@@ -547,8 +575,8 @@ private:
                 mlir::TypeRange{mlir::RankedTensorType::get ({N, F, Ho, Wo}, elem)},
                 mlir::ValueRange{input, filter},
                 mlir::ValueRange{out},
-                b.getDenseI64ArrayAttr (strides),
-                b.getDenseI64ArrayAttr (dilations)).getResult (0);
+                b.getI64TensorAttr (strides),
+                b.getI64TensorAttr (dilations)).getResult (0);
 
         // add bias if present (broadcast [F] over [N, F, Ho, Wo])
         if (node.inputs().size() >= 3 && !node.inputs()[2]->name().empty())
@@ -692,7 +720,7 @@ private:
 
         if (elem.isF32() || elem.isF64() || elem.isF16() || elem.isBF16())
         {
-            zero    = mlir::arith::ConstantOp::create (
+            zero = mlir::arith::ConstantOp::create (
                           body_b, loc, elem,
                           body_b.getFloatAttr (elem, 0.0)).getResult();
             max_val = mlir::arith::MaximumFOp::create (
@@ -700,7 +728,7 @@ private:
         }
         else
         {
-            zero    = mlir::arith::ConstantOp::create (
+            zero = mlir::arith::ConstantOp::create (
                           body_b, loc, elem,
                           body_b.getIntegerAttr (elem, 0)).getResult();
             max_val = mlir::arith::MaxSIOp::create (
@@ -780,8 +808,8 @@ private:
         mlir::Value fake_kernel = make_zero_tensor (b, loc, {Kh, Kw}, elem);
 
         // output initialized with -inf so max accumulation is correct
-        mlir::Value out     = make_neg_inf_tensor (b, loc, {N, C, Ho, Wo}, elem);
-        auto        out_type = mlir::RankedTensorType::get ({N, C, Ho, Wo}, elem);
+        mlir::Value out = make_neg_inf_tensor (b, loc, {N, C, Ho, Wo}, elem);
+        auto out_type = mlir::RankedTensorType::get ({N, C, Ho, Wo}, elem);
 
         mlir::Value result =
             mlir::linalg::PoolingNchwMaxOp::create (
@@ -789,8 +817,8 @@ private:
                 mlir::TypeRange{out_type},
                 mlir::ValueRange{input, fake_kernel},
                 mlir::ValueRange{out},
-                b.getDenseI64ArrayAttr (strides),
-                b.getDenseI64ArrayAttr (dilations))
+                b.getI64TensorAttr (strides),
+                b.getI64TensorAttr (dilations))
             .getResult (0);
 
         value_map_[node.outputs()[0]->name()] = result;
@@ -875,17 +903,17 @@ private:
         mlir::Value mean  = lookup (node.inputs()[3]->name());
         mlir::Value var   = lookup (node.inputs()[4]->name());
 
-        auto x_type  = mlir::cast<mlir::RankedTensorType> (x.getType());
+        auto x_type = mlir::cast<mlir::RankedTensorType> (x.getType());
         auto x_shape = x_type.getShape();  // [N, C, H, W]
-        mlir::Type elem    = x_type.getElementType();
+        mlir::Type elem = x_type.getElementType();
 
         float epsilon = node.attr_as<float> ("epsilon").value_or (1e-5f);
 
         int64_t N = x_shape[0], C = x_shape[1];
         int64_t H = x_shape[2], W = x_shape[3];
 
-        // X:     (n, c, h, w) -> (n, c, h, w)
-        // scale/bias/mean/var: (n, c, h, w) -> (c)  - broadcast over n, h, w
+        // X: (n, c, h, w) -> (n, c, h, w)
+        // scale/bias/mean/var: (n, c, h, w) -> (c) - broadcast over n, h, w
         mlir::AffineMap identity =
             mlir::AffineMap::getMultiDimIdentityMap (4, ctx_.get());
         mlir::AffineMap c_map =
@@ -943,10 +971,10 @@ private:
             throw std::runtime_error ("emit_softmax: expected 1 input and 1 output");
 
         mlir::Value input  = lookup (node.inputs()[0]->name());
-        auto        x_type = mlir::cast<mlir::RankedTensorType> (input.getType());
-        int64_t     rank   = x_type.getRank();
-        mlir::Type  elem   = x_type.getElementType();
-        auto        shape  = x_type.getShape();
+        auto x_type = mlir::cast<mlir::RankedTensorType> (input.getType());
+        int64_t rank  = x_type.getRank();
+        mlir::Type elem  = x_type.getElementType();
+        auto shape = x_type.getShape();
 
         int64_t axis = node.attr_as<int64_t> ("axis").value_or (-1);
         if (axis < 0) axis += rank;
@@ -1057,6 +1085,48 @@ private:
         }
 
         value_map_[node.outputs()[0]->name()] = div_op.getResult (0);
+    }
+
+    void emit_flatten (mlir::OpBuilder& b, mlir::Location loc, const Node& node)
+    {
+        if (node.inputs().size() < 1 || node.outputs().size() < 1)
+            throw std::runtime_error ("emit_flatten: expected 1 input and 1 output");
+
+        mlir::Value input = lookup (node.inputs()[0]->name());
+        auto in_type = mlir::cast<mlir::RankedTensorType> (input.getType());
+        auto shape = in_type.getShape();
+        int64_t rank = in_type.getRank();
+
+        int64_t axis = node.attr_as<int64_t> ("axis").value_or (1);
+        if (axis < 0) axis += rank;
+
+        // outer = shape[0] * ... * shape[axis-1],  inner = shape[axis] * ... * shape[rank-1]
+        int64_t outer = 1, inner = 1;
+        for (int64_t i = 0;    i < axis; ++i) outer *= shape[i];
+        for (int64_t i = axis; i < rank; ++i) inner *= shape[i];
+
+        // reuse the same reshape infrastructure: constant shape tensor [outer, inner]
+        mlir::Type idx_type = b.getIndexType();
+        auto shape_tensor_type = mlir::RankedTensorType::get ({2}, idx_type);
+
+        llvm::SmallVector<mlir::Attribute> idx_attrs = {
+            b.getIndexAttr (outer),
+            b.getIndexAttr (inner)
+        };
+
+        mlir::Value shape_tensor = mlir::arith::ConstantOp::create (
+            b, loc, shape_tensor_type,
+            mlir::DenseElementsAttr::get (shape_tensor_type,
+                llvm::ArrayRef<mlir::Attribute> (idx_attrs)));
+
+        auto result_type = mlir::RankedTensorType::get (
+            {outer, inner}, in_type.getElementType());
+
+        mlir::Value result =
+            mlir::tensor::ReshapeOp::create (b, loc, result_type, input,
+                shape_tensor).getResult();
+
+        value_map_[node.outputs()[0]->name()] = result;
     }
 };
 

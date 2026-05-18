@@ -76,10 +76,13 @@ def main():
         os.path.join(script_dir, "models", "conv_relu_gemm.onnx")
 
     # find tc_main binary
-    tc_bin = os.path.join(repo_root, "build-codegen", "tc_main")
-    if not os.path.exists(tc_bin):
-        print(f"error: tc_main not found at {tc_bin}")
-        print("Build with: cmake --build build-codegen")
+    for candidate in ("build-codegen", "build"):
+        tc_bin = os.path.join(repo_root, candidate, "tc_main")
+        if os.path.exists(tc_bin):
+            break
+    else:
+        print("error: tc_main not found in build-codegen/ or build/")
+        print("Build with: cmake --build build")
         sys.exit(1)
 
     # get model info

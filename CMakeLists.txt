@@ -103,8 +103,12 @@ if (BUILD_CODEGEN)
         ${LLVM_INCLUDE_DIRS}
     )
 
+    # expose LLVM library directory so the JIT can load runner utils at runtime
+    get_filename_component (TC_LLVM_LIB_DIR "${LLVM_DIR}/../../.." ABSOLUTE)
+
     target_compile_definitions (tc_codegen PUBLIC
         ${LLVM_DEFINITIONS}
+        TC_LLVM_LIB_DIR="${TC_LLVM_LIB_DIR}/lib"
     )
 
     target_compile_options (tc_codegen PRIVATE
