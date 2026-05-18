@@ -3,8 +3,7 @@
 End-to-end correctness check.
 
 Usage:
-    python3 verify.py                          # default model
-    python3 verify.py <model.onnx> [N C H W]   # custom model and input shape
+    python3 verify.py <model.onnx> [N C H W]
 
 Compares TensorCompiler JIT output with onnxruntime reference.
 """
@@ -72,14 +71,19 @@ def main():
     script_dir = os.path.dirname(os.path.abspath(__file__))
     repo_root  = os.path.dirname(script_dir)
 
-    model_path = sys.argv[1] if len(sys.argv) > 1 else \
-        os.path.join(script_dir, "models", "conv_relu_gemm.onnx")
+    if len(sys.argv) < 2:
+        print("usage: python3 verify.py <model.onnx> [N C H W]")
+        sys.exit(1)
+    model_path = sys.argv[1]
 
     # find tc_main binary
-    tc_bin = os.path.join(repo_root, "build-codegen", "tc_main")
-    if not os.path.exists(tc_bin):
-        print(f"error: tc_main not found at {tc_bin}")
-        print("Build with: cmake --build build-codegen")
+    for candidate in ("build-codegen", "build"):
+        tc_bin = os.path.join(repo_root, candidate, "tc_main")
+        if os.path.exists(tc_bin):
+            break
+    else:
+        print("error: tc_main not found in build-codegen/ or build/")
+        print("Build with: cmake --build build")
         sys.exit(1)
 
     # get model info
