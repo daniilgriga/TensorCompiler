@@ -14,7 +14,7 @@
 
 namespace tc
 {
-    class GraphBuilder 
+    class GraphBuilder
     {
     private:
         std::vector<std::unique_ptr<Node>> nodes_;
@@ -103,7 +103,20 @@ namespace tc
                 graph_initializers_.push_back(value);
         }
 
-        Node* add_node (std::string op_type,
+        void set_value_dtype (Value* value, DType dtype)
+        {
+            if (!value) return;
+            value->set_dtype(dtype);
+        }
+
+        void set_value_data (Value* value, std::vector<uint8_t> data)
+        {
+            if (!value) return;
+            value->set_data(std::move(data));
+        }
+
+        Node* add_node(
+               std::string op_type,
                std::vector<Value*> inputs,
                std::vector<Value*> outputs,
                Attributes attrs = {},
@@ -125,6 +138,7 @@ namespace tc
                 std::move(outputs),
                 std::move(attrs)
                 )));
+
             Node* node = nodes_.back().get();
 
             for (Value* in : node->inputs())

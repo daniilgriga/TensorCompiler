@@ -1,12 +1,13 @@
-cmake_minimum_required (VERSION 3.15)
+cmake_minimum_required (VERSION 3.28)
 
-project (TensorCompiler LANGUAGES CXX)
+project (TensorCompiler LANGUAGES C CXX)
 
-set (CMAKE_CXX_STANDARD 17)
+set (CMAKE_CXX_STANDARD 20)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option (SANITIZE "Enable Address and Undefined sanitizers" OFF)
 option (BUILD_TESTS "Build tests" ON)
+option (BUILD_CODEGEN "Build MLIR/LLVM codegen backend" OFF)
 
 if (MSVC)
     set (COMMON_COMPILE_OPTIONS /W4 /WX)
@@ -75,6 +76,59 @@ target_link_options (tc_core PRIVATE
 
 target_link_libraries (tc_core PUBLIC protobuf::libprotobuf)
 
+# MLIR/LLVM codegen backend
+if (BUILD_CODEGEN)
+    find_package (MLIR REQUIRED CONFIG)
+    find_package (LLVM REQUIRED CONFIG)
+
+    message (STATUS "Found MLIR ${MLIR_PACKAGE_VERSION} in ${MLIR_DIR}")
+    message (STATUS "Found LLVM ${LLVM_PACKAGE_VERSION} in ${LLVM_DIR}")
+
+    list (APPEND CMAKE_MODULE_PATH "${MLIR_CMAKE_DIR}" "${LLVM_CMAKE_DIR}")
+    include (AddLLVM)
+    include (AddMLIR)
+
+    add_library (tc_codegen
+        src/codegen/mlir_gen.cpp
+        src/codegen/lowering_pipeline.cpp
+        src/codegen/llvm_emitter.cpp
+    )
+
+    target_include_directories (tc_codegen PUBLIC
+        include/
+    )
+
+    target_include_directories (tc_codegen SYSTEM PUBLIC
+        ${MLIR_INCLUDE_DIRS}
+        ${LLVM_INCLUDE_DIRS}
+    )
+
+    # expose LLVM library directory so the JIT can load runner utils at runtime
+    get_filename_component (TC_LLVM_LIB_DIR "${LLVM_DIR}/../../.." ABSOLUTE)
+
+    target_compile_definitions (tc_codegen PUBLIC
+        ${LLVM_DEFINITIONS}
+        TC_LLVM_LIB_DIR="${TC_LLVM_LIB_DIR}/lib"
+    )
+
+    target_compile_options (tc_codegen PRIVATE
+        ${COMMON_COMPILE_OPTIONS}
+        ${SANITIZE_FLAGS}
+        -Wno-unused-parameter
+    )
+
+    target_link_options (tc_codegen PRIVATE
+        ${SANITIZE_FLAGS}
+    )
+
+    target_link_libraries (tc_codegen PUBLIC
+        tc_core
+        MLIR
+        LLVM
+        MLIRExecutionEngine
+    )
+endif ()
+
 # main
 add_executable (tc_main src/main.cpp)
 
@@ -87,7 +141,13 @@ target_link_options (tc_main PRIVATE
     ${SANITIZE_FLAGS}
 )
 
-target_link_libraries (tc_main PRIVATE tc_core)
+if (BUILD_CODEGEN)
+    target_link_libraries (tc_main PRIVATE tc_core tc_codegen)
+    target_compile_definitions (tc_main PRIVATE TC_WITH_CODEGEN)
+
+else ()
+    target_link_libraries (tc_main PRIVATE tc_core)
+endif ()
 
 # tests
 if (BUILD_TESTS)
@@ -99,6 +159,12 @@ if (BUILD_TESTS)
         tests/graph_builder_smoke_test.cpp
         tests/importer_test.cpp
     )
+
+    if (BUILD_CODEGEN)
+        target_sources (tc_tests PRIVATE
+            tests/lowering_pipeline_smoke_test.cpp
+        )
+    endif ()
 
     target_compile_definitions (tc_tests PRIVATE
         TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/models"
@@ -115,6 +181,42 @@ if (BUILD_TESTS)
 
     target_link_libraries (tc_tests PRIVATE tc_core GTest::gtest GTest::gtest_main)
 
+    if (BUILD_CODEGEN)
+        target_link_libraries (tc_tests PRIVATE tc_codegen)
+    endif ()
+
     include (GoogleTest)
     gtest_discover_tests (tc_tests)
+
+    # codegen tests — only when MLIR/LLVM is available
+    if (BUILD_CODEGEN)
+        add_executable (tc_codegen_tests
+            tests/codegen_test.cpp
+        )
+
+        add_dependencies (tc_codegen_tests tc_main)
+
+        target_compile_definitions (tc_codegen_tests PRIVATE
+            TEST_MODELS_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/models"
+            TC_MAIN_BIN="$<TARGET_FILE:tc_main>"
+        )
+
+        target_compile_options (tc_codegen_tests PRIVATE
+            ${COMMON_COMPILE_OPTIONS}
+            ${SANITIZE_FLAGS}
+            -Wno-unused-parameter
+        )
+
+        target_link_options (tc_codegen_tests PRIVATE
+            ${SANITIZE_FLAGS}
+        )
+
+        target_link_libraries (tc_codegen_tests PRIVATE
+            tc_codegen
+            GTest::gtest
+            GTest::gtest_main
+        )
+
+        gtest_discover_tests (tc_codegen_tests)
+    endif ()
 endif ()

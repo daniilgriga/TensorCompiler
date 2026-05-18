@@ -1,5 +1,18 @@
-build/
-*.onnx
+build*/
+.vscode/
 
-# small generated test models
+# ONNX models (except tracked test models)
+*.onnx
 !tests/models/*.onnx
+
+# compiler output artifacts
+output/*.ll
+output/*.s
+output/*.o
+output/*.bc
+*.so
+*.dylib
+*.o
+
+# JIT/run temp files
+*.bin

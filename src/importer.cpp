@@ -1,3 +1,4 @@
+#include <cstring>
 #include <iostream>
 #include <fstream>
 #include <stdexcept>
@@ -27,6 +28,19 @@ namespace tc
             return model;
         }
 
+        // pack typed repeated fields into raw bytes for uniform downstream use
+        template <typename T>
+        std::vector<uint8_t> pack_as_raw (const google::protobuf::RepeatedField<T>& field)
+        {
+            std::vector<uint8_t> raw (field.size() * sizeof(T));
+            for (int i = 0; i < field.size(); ++i)
+            {
+                T v = field[i];
+                std::memcpy (raw.data() + i * sizeof(T), &v, sizeof(T));
+            }
+            return raw;
+        }
+
         void import_initializers (GraphBuilder& builder,
                                   const onnx::GraphProto& graph,
                                   std::unordered_set<std::string>& init_names)
@@ -39,6 +53,37 @@ namespace tc
 
                 std::vector<int64_t> shape (init.dims().begin(), init.dims().end());
                 val->set_shape (std::move (shape));
+
+                builder.set_value_dtype (val, static_cast<DType> (init.data_type()));
+
+                // normalize to raw bytes regardless of which storage field ONNX uses
+                if (!init.raw_data().empty())
+                {
+                    const auto& rd = init.raw_data();
+                    builder.set_value_data (val, std::vector<uint8_t> (rd.begin(), rd.end()));
+                }
+                else
+                {
+                    switch (init.data_type())
+                    {
+                        case onnx::TensorProto::FLOAT:
+                            builder.set_value_data (val, pack_as_raw (init.float_data()));
+                            break;
+                        case onnx::TensorProto::INT32:
+                            builder.set_value_data (val, pack_as_raw (init.int32_data()));
+                            break;
+                        case onnx::TensorProto::INT64:
+                            builder.set_value_data (val, pack_as_raw (init.int64_data()));
+                            break;
+                        case onnx::TensorProto::DOUBLE:
+                            builder.set_value_data (val, pack_as_raw (init.double_data()));
+                            break;
+                        default:
+                            std::cerr << "warning: no raw_data and unsupported typed field "
+                                      << "for initializer '" << init.name() << "'\n";
+                            break;
+                    }
+                }
 
                 init_names.insert (init.name());
             }
@@ -57,6 +102,23 @@ namespace tc
                     continue;
 
                 builder.mark_as_input (val);
+
+                if (input.type().has_tensor_type())
+                {
+                    const auto& tt = input.type().tensor_type();
+
+                    if (tt.elem_type() != 0)
+                        builder.set_value_dtype (val, static_cast<DType> (tt.elem_type()));
+
+                    if (tt.has_shape())
+                    {
+                        std::vector<int64_t> shape;
+                        shape.reserve (tt.shape().dim_size());
+                        for (int d = 0; d < tt.shape().dim_size(); ++d)
+                            shape.push_back (tt.shape().dim(d).dim_value());
+                        val->set_shape (std::move (shape));
+                    }
+                }
             }
         }
 
@@ -127,19 +189,24 @@ namespace tc
                 const auto& onnx_node = graph.node (node_idx);
 
                 std::vector<Value*> inputs;
+                inputs.reserve (static_cast<std::size_t> (onnx_node.input_size()));
+
+                bool seen_empty = false;
                 for (int i = 0; i < onnx_node.input_size(); ++i)
                 {
                     const auto& name = onnx_node.input (i);
-                    if (name.empty ())
+                    if (name.empty())
                     {
-                        inputs.push_back (builder.get_or_create_value (
-                            "__tc_empty__node" + std::to_string (node_idx)
-                            + "_" + std::to_string (i)));
+                        seen_empty = true;
+                        continue;
                     }
-                    else
-                    {
-                        inputs.push_back (builder.get_or_create_value (name));
-                    }
+                    if (seen_empty)
+                        throw std::runtime_error (
+                            "import_nodes: non-trailing empty input in node '" +
+                            onnx_node.name() + "' (op '" + onnx_node.op_type() +
+                            "'): input " + std::to_string (i) + " ('" + name +
+                            "') comes after an empty input slot");
+                    inputs.push_back (builder.get_or_create_value (name));
                 }
 
                 std::vector<Value*> outputs;
