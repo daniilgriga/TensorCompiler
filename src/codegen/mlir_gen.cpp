@@ -8,6 +8,7 @@
 #include "mlir/Dialect/Arith/IR/Arith.h"
 #include "mlir/Dialect/Func/IR/FuncOps.h"
 #include "mlir/Dialect/Linalg/IR/Linalg.h"
+#include "mlir/Dialect/Math/IR/Math.h"
 #include "mlir/Dialect/Tensor/IR/Tensor.h"
 #include "mlir/IR/Builders.h"
 #include "mlir/IR/BuiltinOps.h"
@@ -78,6 +79,7 @@ public:
         ctx_->loadDialect<mlir::func::FuncDialect,
                           mlir::arith::ArithDialect,
                           mlir::linalg::LinalgDialect,
+                          mlir::math::MathDialect,
                           mlir::tensor::TensorDialect>();
     }
 
@@ -198,7 +200,8 @@ private:
         if (op == "Conv")    { emit_conv        (b, loc, node);     return; }
         if (op == "Reshape") { emit_reshape     (b, loc, node);     return; }
         if (op == "MaxPool")           { emit_maxpool         (b, loc, node); return; }
-        if (op == "GlobalAveragePool") { emit_global_avg_pool (b, loc, node); return; }
+        if (op == "GlobalAveragePool")   { emit_global_avg_pool (b, loc, node); return; }
+        if (op == "BatchNormalization")  { emit_batchnorm       (b, loc, node); return; }
 
         throw std::runtime_error ("emit_node: unsupported op '" + op + "'");
     }
@@ -857,6 +860,80 @@ private:
             .getResult();
 
         value_map_[node.outputs()[0]->name()] = result;
+    }
+
+    void emit_batchnorm (mlir::OpBuilder& b, mlir::Location loc, const Node& node)
+    {
+        if (node.inputs().size() < 5 || node.outputs().size() < 1)
+            throw std::runtime_error (
+                "emit_batchnorm: expected 5 inputs (X, scale, B, mean, var) and 1 output");
+
+        mlir::Value x     = lookup (node.inputs()[0]->name());
+        mlir::Value scale = lookup (node.inputs()[1]->name());
+        mlir::Value bias  = lookup (node.inputs()[2]->name());
+        mlir::Value mean  = lookup (node.inputs()[3]->name());
+        mlir::Value var   = lookup (node.inputs()[4]->name());
+
+        auto x_type  = mlir::cast<mlir::RankedTensorType> (x.getType());
+        auto x_shape = x_type.getShape();  // [N, C, H, W]
+        mlir::Type elem    = x_type.getElementType();
+
+        float epsilon = node.attr_as<float> ("epsilon").value_or (1e-5f);
+
+        int64_t N = x_shape[0], C = x_shape[1];
+        int64_t H = x_shape[2], W = x_shape[3];
+
+        // X:     (n, c, h, w) -> (n, c, h, w)
+        // scale/bias/mean/var: (n, c, h, w) -> (c)  - broadcast over n, h, w
+        mlir::AffineMap identity =
+            mlir::AffineMap::getMultiDimIdentityMap (4, ctx_.get());
+        mlir::AffineMap c_map =
+            mlir::AffineMap::get (4, 0,
+                {mlir::getAffineDimExpr (1, ctx_.get())}, ctx_.get());
+
+        llvm::SmallVector<mlir::utils::IteratorType> iters (
+            4, mlir::utils::IteratorType::parallel);
+
+        auto result_type = mlir::RankedTensorType::get ({N, C, H, W}, elem);
+        mlir::Value out = make_empty_like (b, loc, x);
+
+        auto generic = mlir::linalg::GenericOp::create (
+            b, loc,
+            mlir::TypeRange{result_type},
+            mlir::ValueRange{x, scale, bias, mean, var},
+            mlir::ValueRange{out},
+            llvm::SmallVector<mlir::AffineMap>{identity, c_map, c_map, c_map, c_map, identity},
+            iters, "", "");
+
+        mlir::Block* body = &generic.getRegion().emplaceBlock();
+        body->addArgument (elem, loc);  // x scalar
+        body->addArgument (elem, loc);  // scale scalar
+        body->addArgument (elem, loc);  // bias scalar
+        body->addArgument (elem, loc);  // mean scalar
+        body->addArgument (elem, loc);  // var scalar
+        body->addArgument (elem, loc);  // output slot
+
+        mlir::OpBuilder bb (body, body->end());
+        mlir::Value x_s     = body->getArgument (0);
+        mlir::Value scale_s = body->getArgument (1);
+        mlir::Value bias_s  = body->getArgument (2);
+        mlir::Value mean_s  = body->getArgument (3);
+        mlir::Value var_s   = body->getArgument (4);
+
+        // y = (x - mean) * rsqrt(var + eps) * scale + bias
+        mlir::Value eps_val = mlir::arith::ConstantOp::create (
+            bb, loc, elem,
+            bb.getFloatAttr (elem, static_cast<double> (epsilon))).getResult();
+
+        mlir::Value var_eps = mlir::arith::AddFOp::create (bb, loc, var_s,   eps_val) .getResult();
+        mlir::Value inv_std = mlir::math::RsqrtOp::create  (bb, loc, var_eps)          .getResult();
+        mlir::Value centered = mlir::arith::SubFOp::create  (bb, loc, x_s,    mean_s)  .getResult();
+        mlir::Value normed = mlir::arith::MulFOp::create  (bb, loc, centered, inv_std).getResult();
+        mlir::Value scaled = mlir::arith::MulFOp::create  (bb, loc, normed,  scale_s).getResult();
+        mlir::Value result = mlir::arith::AddFOp::create  (bb, loc, scaled,  bias_s) .getResult();
+        mlir::linalg::YieldOp::create (bb, loc, mlir::ValueRange{result});
+
+        value_map_[node.outputs()[0]->name()] = generic.getResult (0);
     }
 };
 

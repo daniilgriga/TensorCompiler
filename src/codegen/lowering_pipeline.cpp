@@ -86,6 +86,7 @@ namespace tc
         pm.addPass (mlir::createConvertFuncToLLVMPass (func_options));
         pm.addPass (mlir::createFinalizeMemRefToLLVMConversionPass (memref_options));
         pm.addPass (mlir::createConvertControlFlowToLLVMPass ());
+        pm.addPass (mlir::createConvertMathToLLVMPass ());
         pm.addPass (mlir::createArithToLLVMConversionPass (arith_options));
         pm.addPass (mlir::createConvertIndexToLLVMPass (index_options));
 
